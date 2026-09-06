@@ -11,16 +11,16 @@ import '../../../domain/chapter_batch/chapter_batch_model.dart';
 import 'manga_details_controller.dart';
 import 'scanlator_dedup.dart';
 
-/// Write-side counterpart of the deduped view, for widget call sites.
-/// Identity when the series has no preference.
+/// Write-side duplicate expansion for widget call sites.
+///
+/// Preferences only choose which release is shown/read. A read or delete
+/// mutation must always include every same-number release, including when no
+/// preference has been configured or a chapter-list filter hides a copy.
 List<int> expandIdsAcrossScanlators(
   WidgetRef ref, {
   required int mangaId,
   required List<int> chapterIds,
 }) {
-  if (ref.read(mangaPreferredScanlatorsProvider(mangaId: mangaId)).isEmpty) {
-    return chapterIds;
-  }
   return expandIdsForDuplicates(
     ref.read(mangaChapterListProvider(mangaId: mangaId)).value,
     chapterIds,
@@ -37,10 +37,14 @@ Future<void> reconcileReadAcrossScanlators(
   if (all == null) return;
   final ids = reconcileIdsForReadNumbers(all);
   if (ids.isEmpty) return;
-  await ref.read(mangaBookRepositoryProvider).modifyBulkChapters(
+  await ref
+      .read(mangaBookRepositoryProvider)
+      .modifyBulkChapters(
         // lastPageRead reset matches the bulk mark-read action's shape.
         ChapterBatch(
-            ids: ids, patch: ChapterChange(isRead: true, lastPageRead: 0)),
+          ids: ids,
+          patch: ChapterChange(isRead: true, lastPageRead: 0),
+        ),
       );
   ref.invalidate(mangaChapterListProvider(mangaId: mangaId));
 }

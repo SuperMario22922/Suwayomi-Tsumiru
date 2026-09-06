@@ -46,8 +46,9 @@ List<ChapterDto> applyPreferredScanlators(
     final kept = keepChapterId == null
         ? null
         : copies.firstWhereOrNull((c) => c.id == keepChapterId);
-    final inProgress =
-        copies.firstWhereOrNull((c) => !c.isRead && c.lastPageRead > 0);
+    final inProgress = copies.firstWhereOrNull(
+      (c) => !c.isRead && c.lastPageRead > 0,
+    );
     final downloaded = copies.firstWhereOrNull((c) => c.isDownloaded);
     String? winner;
     if (kept != null) {
@@ -58,9 +59,11 @@ List<ChapterDto> applyPreferredScanlators(
       winner = scanlatorGroupOf(downloaded);
     } else {
       winner = preferred.firstWhereOrNull(
-          (g) => copies.any((c) => scanlatorGroupOf(c) == g));
+        (g) => copies.any((c) => scanlatorGroupOf(c) == g),
+      );
       winner ??= scanlatorGroupOf(
-          copies.reduce((a, b) => a.sourceOrder <= b.sourceOrder ? a : b));
+        copies.reduce((a, b) => a.sourceOrder <= b.sourceOrder ? a : b),
+      );
     }
     winnersByNumber[entry.key] = winner;
   }
@@ -73,10 +76,8 @@ List<ChapterDto> applyPreferredScanlators(
       else if (scanlatorGroupOf(c) == winnersByNumber[c.chapterNumber])
         c.copyWith(
           isRead: byNumber[c.chapterNumber]!.any((x) => x.isRead),
-          isDownloaded:
-              byNumber[c.chapterNumber]!.any((x) => x.isDownloaded),
-          isBookmarked:
-              byNumber[c.chapterNumber]!.any((x) => x.isBookmarked),
+          isDownloaded: byNumber[c.chapterNumber]!.any((x) => x.isDownloaded),
+          isBookmarked: byNumber[c.chapterNumber]!.any((x) => x.isBookmarked),
         ),
   ];
 }
@@ -105,6 +106,33 @@ List<int> expandIdsForDuplicates(
     out.addAll(duplicateChapterIds(allChapters, id));
   }
   return out.toList();
+}
+
+/// Keeps one entry for each positive chapter number while navigating the
+/// reader. If the open chapter is one of several same-number releases, it is
+/// retained so the reader does not swap its in-flight chapter underneath it.
+/// Non-positive numbers remain distinct because they are not reliable chapter
+/// numbers.
+List<ChapterDto> skipDuplicateChaptersForNavigation(
+  List<ChapterDto> chapters, {
+  required int keepChapterId,
+}) {
+  final selectedByNumber = <double, ChapterDto>{};
+  for (final chapter in chapters) {
+    if (!(chapter.chapterNumber > 0)) continue;
+    if (chapter.id == keepChapterId) {
+      selectedByNumber[chapter.chapterNumber] = chapter;
+    } else {
+      selectedByNumber.putIfAbsent(chapter.chapterNumber, () => chapter);
+    }
+  }
+
+  return [
+    for (final chapter in chapters)
+      if (!(chapter.chapterNumber > 0) ||
+          selectedByNumber[chapter.chapterNumber]?.id == chapter.id)
+        chapter,
+  ];
 }
 
 /// Unread copies whose chapter number has at least one read copy — the
