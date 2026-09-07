@@ -181,6 +181,7 @@ class ReaderBottomControls extends ConsumerWidget {
                         context: context,
                         mangaId: chapter.mangaId,
                         currentChapterId: chapter.id,
+                        readerScanlatorGroup: readerScanlatorGroup,
                         transVertical: scrollDirection == Axis.vertical,
                       ),
                     ),
@@ -243,6 +244,7 @@ Future<void> _showChapterPicker({
   required BuildContext context,
   required int mangaId,
   required int currentChapterId,
+  required String readerScanlatorGroup,
   required bool transVertical,
 }) {
   final readerContext = context;
@@ -272,6 +274,7 @@ Future<void> _showChapterPicker({
                   mangaChapterListWithFilterProvider(
                     mangaId: mangaId,
                     keepChapterId: currentChapterId,
+                    readerScanlatorGroup: readerScanlatorGroup,
                   ),
                 );
                 return chapters.showUiWhenData(
