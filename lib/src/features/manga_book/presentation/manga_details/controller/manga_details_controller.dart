@@ -50,8 +50,7 @@ class MangaWithId extends _$MangaWithId {
       },
       db: ref.watch(offlineReadDatabaseProvider),
       offlineEnabled: ref.watch(offlineActiveProvider),
-      offlineFirst:
-          ref.watch(viewOfflineNowProvider) ||
+      offlineFirst: ref.watch(viewOfflineNowProvider) ||
           ref.watch(serverUnreachableProvider),
       mangaId: mangaId,
     );
@@ -60,9 +59,8 @@ class MangaWithId extends _$MangaWithId {
     if (ref.mounted) ref.keepAlive();
     // Don't mirror browsed (non-library) manga into the offline catalog.
     if (manga != null && manga.inLibrary && fromServer) {
-      unawaited(
-        sync?.syncManga(manga, fetchedAtGen: fetchGen) ?? Future.value(),
-      );
+      unawaited(sync?.syncManga(manga, fetchedAtGen: fetchGen) ??
+          Future.value());
     }
     return manga;
   }
@@ -77,9 +75,8 @@ class MangaChapterList extends _$MangaChapterList {
   @override
   Future<List<ChapterDto>?> build({required int mangaId}) async {
     final repo = ref.watch(mangaBookRepositoryProvider);
-    final refreshFromSource = ref
-        .watch(refreshChaptersFromSourceProvider)
-        .ifNull();
+    final refreshFromSource =
+        ref.watch(refreshChaptersFromSourceProvider).ifNull();
     // getMangaAndChapterList also refreshes metadata server-side; track it so
     // we know to refresh MangaWithId too (#363).
     var didSourceFetch = false;
@@ -113,20 +110,17 @@ class MangaChapterList extends _$MangaChapterList {
       },
       db: ref.watch(offlineReadDatabaseProvider),
       offlineEnabled: ref.watch(offlineActiveProvider),
-      offlineFirst:
-          ref.watch(viewOfflineNowProvider) ||
+      offlineFirst: ref.watch(viewOfflineNowProvider) ||
           ref.watch(serverUnreachableProvider),
       mangaId: mangaId,
     );
     if (ref.mounted) ref.keepAlive();
     if (result != null && fromServer) {
-      unawaited(
-        (sync?.syncChapters(result) ?? Future.value(<int>{})).then((nr) {
-          if (ref.mounted) {
-            reconcileManga(ref, mangaId, newlyReadChapterIds: nr);
-          }
-        }),
-      );
+      unawaited((sync?.syncChapters(result) ?? Future.value(<int>{})).then((nr) {
+        if (ref.mounted) {
+          reconcileManga(ref, mangaId, newlyReadChapterIds: nr);
+        }
+      }));
     }
     if (didSourceFetch) {
       // MangaWithId loaded before the scrape refreshed metadata; refresh it so
@@ -153,43 +147,41 @@ class MangaChapterList extends _$MangaChapterList {
     final offlineDb = ref.read(offlineReadDatabaseProvider);
     // An explicit refresh is a deliberate retry — but while the user has the
     // offline view pinned, honor it here too.
-    final viewOffline =
-        ref.read(viewOfflineNowProvider) || ref.read(serverUnreachableProvider);
+    final viewOffline = ref.read(viewOfflineNowProvider) ||
+        ref.read(serverUnreachableProvider);
     var didSourceFetch = false;
     // Wrap in chaptersWithOfflineFallback like build() does, so an explicit
     // refresh while the device is offline serves the on-device catalog instead
     // of erroring/clearing the list.
     // Mirror only genuine server responses (see build()).
     var fromServer = false;
-    final result = await AsyncValue.guard(
-      () => chaptersWithOfflineFallback(
-        fetch: () async {
-          final stored = await repo.getStoredChapterList(mangaId);
-          fromServer = true;
-          if (!refreshFromSource && stored != null && stored.isNotEmpty) {
-            return stored;
-          }
-          try {
-            final fetched = await repo.getMangaAndChapterList(mangaId);
-            if (fetched != null && fetched.isNotEmpty) {
-              didSourceFetch = true;
-              return fetched;
+    final result = await AsyncValue.guard(() => chaptersWithOfflineFallback(
+          fetch: () async {
+            final stored = await repo.getStoredChapterList(mangaId);
+            fromServer = true;
+            if (!refreshFromSource && stored != null && stored.isNotEmpty) {
+              return stored;
             }
-          } catch (_) {
-            // Source down / gone — fall back to stored instead of clearing.
-          }
-          return stored;
-        },
-        db: offlineDb,
-        offlineEnabled: offlineDb != null,
-        offlineFirst: viewOffline,
-        // An explicit refresh can run a full source scrape, which routinely
-        // outlives the offline cap; the user asked and is watching, so give
-        // it a real window instead of silently serving stale catalog rows.
-        fetchTimeout: const Duration(seconds: 60),
-        mangaId: mangaId,
-      ),
-    );
+            try {
+              final fetched = await repo.getMangaAndChapterList(mangaId);
+              if (fetched != null && fetched.isNotEmpty) {
+                didSourceFetch = true;
+                return fetched;
+              }
+            } catch (_) {
+              // Source down / gone — fall back to stored instead of clearing.
+            }
+            return stored;
+          },
+          db: offlineDb,
+          offlineEnabled: offlineDb != null,
+          offlineFirst: viewOffline,
+              // An explicit refresh can run a full source scrape, which routinely
+          // outlives the offline cap; the user asked and is watching, so give
+          // it a real window instead of silently serving stale catalog rows.
+          fetchTimeout: const Duration(seconds: 60),
+          mangaId: mangaId,
+        ));
     if (ref.mounted) ref.keepAlive();
     // The scrape refreshes metadata too; pick it up so pull-to-refresh
     // updates the synopsis, not just the chapter list.
@@ -208,13 +200,9 @@ class MangaChapterList extends _$MangaChapterList {
       // server-side delete discovered via pull-to-refresh is cleaned up too,
       // not only on a cold provider rebuild. Catalog-served lists are echoes
       // and never mirrored.
-      unawaited(
-        (ref.read(offlineSyncProvider)?.syncChapters(chapters) ??
-                Future.value(<int>{}))
-            .then(
-              (nr) => reconcileManga(ref, mangaId, newlyReadChapterIds: nr),
-            ),
-      );
+      unawaited((ref.read(offlineSyncProvider)?.syncChapters(chapters) ??
+              Future.value(<int>{}))
+          .then((nr) => reconcileManga(ref, mangaId, newlyReadChapterIds: nr)));
     }
   }
 
@@ -250,10 +238,8 @@ Set<String> mangaScanlatorList(Ref ref, {required int mangaId}) {
 class MangaPreferredScanlators extends _$MangaPreferredScanlators {
   @override
   List<String> build({required int mangaId}) {
-    final meta = ref
-        .watch(mangaWithIdProvider(mangaId: mangaId))
-        .value
-        ?.metaData;
+    final meta =
+        ref.watch(mangaWithIdProvider(mangaId: mangaId)).value?.metaData;
     final stored = meta?.preferredScanlators;
     if (stored != null) return stored;
     final legacy = meta?.scanlator;
@@ -290,14 +276,10 @@ class MangaPreferredScanlators extends _$MangaPreferredScanlators {
         if (groups.isEmpty) {
           // Stale ON would silently resume show-all on the next preference.
           ref.invalidate(
-            mangaShowAllScanlatorVersionsProvider(mangaId: mangaId),
-          );
+              mangaShowAllScanlatorVersionsProvider(mangaId: mangaId));
         } else {
-          unawaited(
-            AsyncValue.guard(
-              () => reconcileReadAcrossScanlators(ref, mangaId: mangaId),
-            ),
-          );
+          unawaited(AsyncValue.guard(
+              () => reconcileReadAcrossScanlators(ref, mangaId: mangaId)));
         }
       }
     } catch (_) {}
@@ -326,9 +308,7 @@ class MangaChapterListMode extends _$MangaChapterListMode {
 
   Future<void> update(ChapterListMode mode) async {
     await AsyncValue.guard(
-      () => ref
-          .read(mangaBookRepositoryProvider)
-          .patchMangaMeta(
+      () => ref.read(mangaBookRepositoryProvider).patchMangaMeta(
             mangaId: mangaId,
             key: MangaMetaKeys.chapterListMode.key,
             value: mode.name,
@@ -353,9 +333,7 @@ class MangaRating extends _$MangaRating {
   Future<void> update(int rating) async {
     final next = rating.clamp(0, 5);
     await AsyncValue.guard(
-      () => ref
-          .read(mangaBookRepositoryProvider)
-          .patchMangaMeta(
+      () => ref.read(mangaBookRepositoryProvider).patchMangaMeta(
             mangaId: mangaId,
             key: MangaMetaKeys.rating.key,
             // Meta values are String-typed server-side (MangaMetaTypeInput.value
@@ -384,9 +362,7 @@ class MangaUserTags extends _$MangaUserTags {
 
   Future<void> _persist(List<String> tags) async {
     await AsyncValue.guard(
-      () => ref
-          .read(mangaBookRepositoryProvider)
-          .patchMangaMeta(
+      () => ref.read(mangaBookRepositoryProvider).patchMangaMeta(
             mangaId: mangaId,
             key: MangaMetaKeys.tags.key,
             value: jsonEncode(tags),
@@ -419,22 +395,18 @@ AsyncValue<List<ChapterDto>?> mangaChapterListWithFilter(
 }) {
   final chapterList = ref.watch(mangaChapterListProvider(mangaId: mangaId));
   final chapterFilterUnread = ref.watch(mangaChapterFilterUnreadProvider);
-  final chapterFilterDownloaded = ref.watch(
-    mangaChapterFilterDownloadedProvider,
-  );
+  final chapterFilterDownloaded =
+      ref.watch(mangaChapterFilterDownloadedProvider);
   final chapterFilterBookmark = ref.watch(mangaChapterFilterBookmarkedProvider);
   final ChapterSort sortedBy =
       ref.watch(mangaChapterSortProvider) ?? DBKeys.chapterSort.initial;
-  final sortedDirection = ref
-      .watch(mangaChapterSortDirectionProvider)
-      .ifNull(true);
+  final sortedDirection =
+      ref.watch(mangaChapterSortDirectionProvider).ifNull(true);
 
-  final preferredScanlators = ref.watch(
-    mangaPreferredScanlatorsProvider(mangaId: mangaId),
-  );
-  final showAllVersions = ref.watch(
-    mangaShowAllScanlatorVersionsProvider(mangaId: mangaId),
-  );
+  final preferredScanlators =
+      ref.watch(mangaPreferredScanlatorsProvider(mangaId: mangaId));
+  final showAllVersions =
+      ref.watch(mangaShowAllScanlatorVersionsProvider(mangaId: mangaId));
   // No offline gate: catalog rows carry real chapter numbers since schema v9,
   // so dedup groups offline exactly as online (pre-v9 rows fall back to the
   // unique index and simply never collapse).
@@ -461,23 +433,16 @@ AsyncValue<List<ChapterDto>?> mangaChapterListWithFilter(
 
   int applyChapterSort(ChapterDto m1, ChapterDto m2) {
     final sortDirToggle = (sortedDirection ? 1 : -1);
-    final result =
-        (switch (sortedBy) {
-          ChapterSort.fetchedDate =>
-            (int.tryParse(m1.fetchedAt) ?? 0).compareTo(
-              int.tryParse(m2.fetchedAt) ?? 0,
-            ),
+    final result = (switch (sortedBy) {
+          ChapterSort.fetchedDate => (int.tryParse(m1.fetchedAt) ?? 0)
+              .compareTo(int.tryParse(m2.fetchedAt) ?? 0),
           ChapterSort.source => (m1.index).compareTo(m2.index),
-          ChapterSort.uploadDate =>
-            (int.tryParse(m1.uploadDate) ?? 0).compareTo(
-              int.tryParse(m2.uploadDate) ?? 0,
-            ),
-          ChapterSort.chapterNumber => m1.chapterNumber.compareTo(
-            m2.chapterNumber,
-          ),
-          ChapterSort.alphabetical => m1.name.toLowerCase().compareTo(
-            m2.name.toLowerCase(),
-          ),
+          ChapterSort.uploadDate => (int.tryParse(m1.uploadDate) ?? 0)
+              .compareTo(int.tryParse(m2.uploadDate) ?? 0),
+          ChapterSort.chapterNumber =>
+            m1.chapterNumber.compareTo(m2.chapterNumber),
+          ChapterSort.alphabetical =>
+            m1.name.toLowerCase().compareTo(m2.name.toLowerCase()),
         }) *
         sortDirToggle;
     // List.sort is unstable; keep ties in source order (matches Komikku,
@@ -496,11 +461,8 @@ AsyncValue<List<ChapterDto>?> mangaChapterListWithFilter(
     } else if (dedupActive) {
       // Dedup BEFORE filters: filters must see aggregate row state, or an
       // unread filter would strip a read copy and silently swap the winner.
-      list = applyPreferredScanlators(
-        list,
-        preferredScanlators,
-        keepChapterId: keepChapterId,
-      );
+      list = applyPreferredScanlators(list, preferredScanlators,
+          keepChapterId: keepChapterId);
     }
     return [...list.where(applyChapterFilter)]..sort(applyChapterSort);
   });
@@ -514,24 +476,23 @@ AsyncValue<List<ChapterDto>?> mangaChapterListForBulkActions(
   required int mangaId,
 }) {
   final chapterList = ref.watch(mangaChapterListProvider(mangaId: mangaId));
-  final preferred = ref.watch(
-    mangaPreferredScanlatorsProvider(mangaId: mangaId),
-  );
-  final showAll = ref.watch(
-    mangaShowAllScanlatorVersionsProvider(mangaId: mangaId),
-  );
+  final preferred =
+      ref.watch(mangaPreferredScanlatorsProvider(mangaId: mangaId));
+  final showAll =
+      ref.watch(mangaShowAllScanlatorVersionsProvider(mangaId: mangaId));
   // No offline gate — catalog rows carry real chapter numbers (schema v9),
   // so dedup behaves the same offline; see mangaChapterListWithFilter.
   if (preferred.isEmpty || showAll) return chapterList;
   return chapterList.copyWithData(
-    (data) => data == null ? null : applyPreferredScanlators(data, preferred),
-  );
+      (data) => data == null ? null : applyPreferredScanlators(data, preferred));
 }
 
 @riverpod
-ChapterDto? firstUnreadInFilteredChapterList(Ref ref, {required int mangaId}) {
-  final isAscSorted =
-      ref.watch(mangaChapterSortDirectionProvider) ??
+ChapterDto? firstUnreadInFilteredChapterList(
+  Ref ref, {
+  required int mangaId,
+}) {
+  final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
       DBKeys.chapterSortDirection.initial;
   final filteredList = ref
       .watch(mangaChapterListWithFilterProvider(mangaId: mangaId))
@@ -540,13 +501,11 @@ ChapterDto? firstUnreadInFilteredChapterList(Ref ref, {required int mangaId}) {
     return null;
   } else {
     if (isAscSorted) {
-      return filteredList.firstWhereOrNull(
-        (element) => !element.isRead.ifNull(true),
-      );
+      return filteredList
+          .firstWhereOrNull((element) => !element.isRead.ifNull(true));
     } else {
-      return filteredList.lastWhereOrNull(
-        (element) => !element.isRead.ifNull(true),
-      );
+      return filteredList
+          .lastWhereOrNull((element) => !element.isRead.ifNull(true));
     }
   }
 }
@@ -559,17 +518,14 @@ ChapterDto? firstUnreadInFilteredChapterList(Ref ref, {required int mangaId}) {
   bool shouldAscSort = true,
   String? readerScanlatorGroup,
 }) {
-  final isAscSorted =
-      ref.watch(mangaChapterSortDirectionProvider) ??
+  final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
       DBKeys.chapterSortDirection.initial;
   final filteredList = ref
-      .watch(
-        mangaChapterListWithFilterProvider(
+      .watch(mangaChapterListWithFilterProvider(
           mangaId: mangaId,
           keepChapterId: chapterId,
           readerScanlatorGroup: readerScanlatorGroup,
-        ),
-      )
+        ))
       .value;
   if (filteredList == null) {
     return null;
@@ -578,16 +534,16 @@ ChapterDto? firstUnreadInFilteredChapterList(Ref ref, {required int mangaId}) {
       filteredList,
       keepChapterId: chapterId,
     );
-    final current = navigationList.indexWhere(
-      (element) => element.id == chapterId,
-    );
+    final current =
+        navigationList.indexWhere((element) => element.id == chapterId);
     // Not in the filtered list (e.g. unread-only filter while re-reading):
     // otherwise current == -1 would resolve nextChapter to filteredList[0].
     if (current == -1) return (first: null, second: null);
     final prevChapter = current > 0 ? navigationList[current - 1] : null;
-    final nextChapter = current < (navigationList.length - 1)
-        ? navigationList[current + 1]
-        : null;
+    final nextChapter =
+        current < (navigationList.length - 1)
+            ? navigationList[current + 1]
+            : null;
     return (
       first: shouldAscSort && isAscSorted ? nextChapter : prevChapter,
       second: shouldAscSort && isAscSorted ? prevChapter : nextChapter,
@@ -599,8 +555,10 @@ ChapterDto? firstUnreadInFilteredChapterList(Ref ref, {required int mangaId}) {
 class MangaChapterSort extends _$MangaChapterSort
     with SharedPreferenceEnumClientMixin<ChapterSort> {
   @override
-  ChapterSort? build() =>
-      initialize(DBKeys.chapterSort, enumList: ChapterSort.values);
+  ChapterSort? build() => initialize(
+        DBKeys.chapterSort,
+        enumList: ChapterSort.values,
+      );
 }
 
 @riverpod
@@ -614,8 +572,10 @@ class MangaChapterSortDirection extends _$MangaChapterSortDirection
 class MangaChapterDisplayMode extends _$MangaChapterDisplayMode
     with SharedPreferenceEnumClientMixin<ChapterDisplay> {
   @override
-  ChapterDisplay? build() =>
-      initialize(DBKeys.chapterDisplay, enumList: ChapterDisplay.values);
+  ChapterDisplay? build() => initialize(
+        DBKeys.chapterDisplay,
+        enumList: ChapterDisplay.values,
+      );
 }
 
 @riverpod
@@ -646,17 +606,17 @@ class MangaCategoryList extends _$MangaCategoryList {
     final result = await ref
         .watch(mangaBookRepositoryProvider)
         .getMangaCategoryList(mangaId: mangaId);
-    return {for (CategoryDto i in (result ?? <CategoryDto>[])) "${i.id}": i};
+    return {
+      for (CategoryDto i in (result ?? <CategoryDto>[])) "${i.id}": i,
+    };
   }
 
   Future<void> refresh() async {
-    final result = await AsyncValue.guard(
-      () => ref
-          .read(mangaBookRepositoryProvider)
-          .getMangaCategoryList(mangaId: mangaId),
-    );
-    state = result.copyWithData(
-      (data) => {for (CategoryDto i in (data ?? <CategoryDto>[])) "${i.id}": i},
-    );
+    final result = await AsyncValue.guard(() => ref
+        .read(mangaBookRepositoryProvider)
+        .getMangaCategoryList(mangaId: mangaId));
+    state = result.copyWithData((data) => {
+          for (CategoryDto i in (data ?? <CategoryDto>[])) "${i.id}": i,
+        });
   }
 }

@@ -28,13 +28,13 @@ class _FakeReadWithLongTap extends ReadWithLongTap {
 }
 
 ChapterPagesDto _pages() => ChapterPagesDto(
-  chapter: ChapterPagesChapterDto(id: 1, pageCount: 3),
-  pages: const [
-    '/manga/1/chapter/0/page/0',
-    '/manga/1/chapter/0/page/1',
-    '/manga/1/chapter/0/page/2',
-  ],
-);
+      chapter: ChapterPagesChapterDto(id: 1, pageCount: 3),
+      pages: const [
+        '/manga/1/chapter/0/page/0',
+        '/manga/1/chapter/0/page/1',
+        '/manga/1/chapter/0/page/2',
+      ],
+    );
 
 const _copyKey = ValueKey('reader-page-action-copy-image');
 const _shareKey = ValueKey('reader-page-action-share');
@@ -78,7 +78,9 @@ Future<void> _pumpReader(
             resolvedReaderMode: ReaderMode.webtoon,
             currentIndex: 0,
             chapterPages: _pages(),
-            child: const SizedBox.expand(child: ColoredBox(color: Colors.grey)),
+            child: const SizedBox.expand(
+              child: ColoredBox(color: Colors.grey),
+            ),
           ),
         ),
       ),
@@ -88,9 +90,8 @@ Future<void> _pumpReader(
 }
 
 void main() {
-  testWidgets('pref ON: long-press opens the page-actions sheet', (
-    tester,
-  ) async {
+  testWidgets('pref ON: long-press opens the page-actions sheet',
+      (tester) async {
     await _pumpReader(tester, longTapOn: true);
 
     expect(find.byKey(_copyKey), findsNothing);
@@ -106,9 +107,8 @@ void main() {
   testWidgets('pref OFF: long-press is a no-op', (tester) async {
     await _pumpReader(tester, longTapOn: false);
 
-    final gesture = await tester.startGesture(
-      tester.getCenter(find.byType(ReaderView)),
-    );
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byType(ReaderView)));
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump();
 
@@ -127,9 +127,8 @@ void main() {
     var taps = 0;
     await _pumpReader(tester, longTapOn: false, onTap: () => taps++);
 
-    final gesture = await tester.startGesture(
-      tester.getCenter(find.byType(ReaderView)),
-    );
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byType(ReaderView)));
     await tester.pump(const Duration(milliseconds: 600));
     await gesture.up();
     await tester.pumpAndSettle();

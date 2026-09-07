@@ -47,9 +47,8 @@ List<ChapterDto> applyPreferredScanlators(
     final kept = keepChapterId == null
         ? null
         : copies.firstWhereOrNull((c) => c.id == keepChapterId);
-    final inProgress = copies.firstWhereOrNull(
-      (c) => !c.isRead && c.lastPageRead > 0,
-    );
+    final inProgress =
+        copies.firstWhereOrNull((c) => !c.isRead && c.lastPageRead > 0);
     final downloaded = copies.firstWhereOrNull((c) => c.isDownloaded);
     String? winner;
     if (kept != null) {
@@ -60,11 +59,9 @@ List<ChapterDto> applyPreferredScanlators(
       winner = scanlatorGroupOf(downloaded);
     } else {
       winner = preferred.firstWhereOrNull(
-        (g) => copies.any((c) => scanlatorGroupOf(c) == g),
-      );
+          (g) => copies.any((c) => scanlatorGroupOf(c) == g));
       winner ??= scanlatorGroupOf(
-        copies.reduce((a, b) => a.sourceOrder <= b.sourceOrder ? a : b),
-      );
+          copies.reduce((a, b) => a.sourceOrder <= b.sourceOrder ? a : b));
     }
     winnersByNumber[entry.key] = winner;
   }
@@ -77,8 +74,10 @@ List<ChapterDto> applyPreferredScanlators(
       else if (scanlatorGroupOf(c) == winnersByNumber[c.chapterNumber])
         c.copyWith(
           isRead: byNumber[c.chapterNumber]!.any((x) => x.isRead),
-          isDownloaded: byNumber[c.chapterNumber]!.any((x) => x.isDownloaded),
-          isBookmarked: byNumber[c.chapterNumber]!.any((x) => x.isBookmarked),
+          isDownloaded:
+              byNumber[c.chapterNumber]!.any((x) => x.isDownloaded),
+          isBookmarked:
+              byNumber[c.chapterNumber]!.any((x) => x.isBookmarked),
         ),
   ];
 }
