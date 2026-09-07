@@ -14,6 +14,7 @@ ChapterDto _chapter({
   required String name,
   int sourceOrder = 0,
   double number = 0,
+  String? scanlator,
 }) =>
     Fragment$ChapterDto(
       chapterNumber: number,
@@ -30,6 +31,7 @@ ChapterDto _chapter({
       sourceOrder: sourceOrder,
       uploadDate: '0',
       url: '',
+      scanlator: scanlator,
       meta: const [],
     );
 
@@ -97,7 +99,7 @@ void main() {
     expect([pair!.first, pair.second].where((e) => e != null).length, 1);
   });
 
-  test('reader navigation skips duplicate chapter-number releases', () async {
+  test('reader navigation preserves uncertain same-number chapters', () async {
     final c = await _container([
       _chapter(id: 1, name: 'One A', number: 1, sourceOrder: 1),
       _chapter(id: 2, name: 'One B', number: 1, sourceOrder: 2),
@@ -106,8 +108,23 @@ void main() {
     final pair = c.read(
       getNextAndPreviousChaptersProvider(mangaId: 1, chapterId: 1),
     );
-    // Default source order is descending, so moving forward from Chapter 1
-    // reaches Chapter 2 directly rather than its duplicate release.
+    expect(pair!.first?.id, 2);
+  });
+
+  test('reader follows the opening scanlator for confident releases', () async {
+    final c = await _container([
+      _chapter(id: 1, name: 'Chapter 1', number: 1, sourceOrder: 1,
+          scanlator: 'A'),
+      _chapter(id: 2, name: 'Chapter 1', number: 1, sourceOrder: 2,
+          scanlator: 'B'),
+      _chapter(id: 3, name: 'Chapter 2', number: 2, sourceOrder: 3,
+          scanlator: 'A'),
+    ]);
+    final pair = c.read(getNextAndPreviousChaptersProvider(
+      mangaId: 1,
+      chapterId: 1,
+      readerScanlatorGroup: 'A',
+    ));
     expect(pair!.first?.id, 3);
   });
 }

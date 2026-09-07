@@ -181,7 +181,6 @@ class ReaderBottomControls extends ConsumerWidget {
                         context: context,
                         mangaId: chapter.mangaId,
                         currentChapterId: chapter.id,
-                        readerScanlatorGroup: readerScanlatorGroup,
                         transVertical: scrollDirection == Axis.vertical,
                       ),
                     ),
@@ -244,7 +243,6 @@ Future<void> _showChapterPicker({
   required BuildContext context,
   required int mangaId,
   required int currentChapterId,
-  required String readerScanlatorGroup,
   required bool transVertical,
 }) {
   final readerContext = context;
@@ -268,13 +266,12 @@ Future<void> _showChapterPicker({
             ),
             child: Consumer(
               builder: (context, ref, _) {
-                // keepChapterId: keeps the open chapter visible even if dedup
-                // would otherwise hide it.
+                // Keep the open chapter visible even if its scanlator is not
+                // selected by the preferred-scanlator filter.
                 final chapters = ref.watch(
                   mangaChapterListWithFilterProvider(
                     mangaId: mangaId,
                     keepChapterId: currentChapterId,
-                    readerScanlatorGroup: readerScanlatorGroup,
                   ),
                 );
                 return chapters.showUiWhenData(
@@ -359,6 +356,9 @@ class _ReaderChapterSheet extends StatelessWidget {
               final isCurrent = chapter.id == currentChapterId;
               final lastPageRead =
                   chapter.lastPageRead.getValueOnNullOrNegative();
+              final scanlator = chapter.scanlator.isNotBlank
+                  ? chapter.scanlator!
+                  : context.l10n.unknownScanlator;
               return ListTile(
                 dense: true,
                 visualDensity:
@@ -381,14 +381,16 @@ class _ReaderChapterSheet extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                subtitle: lastPageRead > 0
-                    ? Text(
-                        context.l10n.page(lastPageRead + 1),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: context.textTheme.bodySmall,
-                      )
-                    : null,
+                subtitle: Text(
+                  [
+                    scanlator,
+                    if (lastPageRead > 0)
+                      context.l10n.page(lastPageRead + 1),
+                  ].join(' • '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.textTheme.bodySmall,
+                ),
                 trailing: IconButtonTheme(
                   data: IconButtonThemeData(
                     style: ButtonStyle(
