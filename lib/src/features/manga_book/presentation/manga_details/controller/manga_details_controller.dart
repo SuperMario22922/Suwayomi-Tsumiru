@@ -24,6 +24,7 @@ import '../../../data/manga_book/manga_book_repository.dart';
 import '../../../domain/chapter/chapter_model.dart';
 import '../../../domain/manga/manga_model.dart';
 import 'scanlator_dedup.dart';
+import 'scanlator_propagation.dart';
 
 part 'manga_details_controller.g.dart';
 
@@ -276,6 +277,9 @@ class MangaPreferredScanlators extends _$MangaPreferredScanlators {
           // Stale ON would silently resume show-all on the next preference.
           ref.invalidate(
               mangaShowAllScanlatorVersionsProvider(mangaId: mangaId));
+        } else {
+          unawaited(AsyncValue.guard(
+              () => reconcileReadAcrossScanlators(ref, mangaId: mangaId)));
         }
       }
     } catch (_) {}

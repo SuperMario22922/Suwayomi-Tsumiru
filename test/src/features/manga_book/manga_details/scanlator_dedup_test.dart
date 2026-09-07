@@ -162,15 +162,15 @@ void main() {
     });
   });
 
-  group('mutation identity', () {
-    test('same-number releases stay independent for read/delete actions', () {
+  group('mutation release matching', () {
+    test('uses the reader match for read/delete and reconciliation', () {
       final rows = [
-        ch(id: 1, number: 1, scanlator: 'A'),
+        ch(id: 1, number: 1, scanlator: 'A', isRead: true),
         ch(id: 2, number: 1, scanlator: 'B'),
       ];
-      expect(duplicateChapterIds(rows, 1), [1]);
-      expect(expandIdsForDuplicates(rows, [1]), [1]);
-      expect(reconcileIdsForReadNumbers(rows), isEmpty);
+      expect(duplicateChapterIds(rows, 1), [1, 2]);
+      expect(expandIdsForDuplicates(rows, [1]), [1, 2]);
+      expect(reconcileIdsForReadNumbers(rows), [2]);
     });
   });
 }
