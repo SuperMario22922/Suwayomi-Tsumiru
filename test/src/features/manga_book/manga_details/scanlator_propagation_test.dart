@@ -34,6 +34,17 @@ void main() {
       // source of truth for mutations.
       expect(expandIdsForDuplicates(chapters, [3]), unorderedEquals([3, 4]));
     });
+
+    test('expands duplicate Chapter 0 releases', () {
+      final zeroChapters = [
+        ch(id: 5, number: 0, scanlator: 'A'),
+        ch(id: 6, number: 0, scanlator: 'B'),
+      ];
+      expect(
+        expandIdsForDuplicates(zeroChapters, [5]),
+        unorderedEquals([5, 6]),
+      );
+    });
   });
 
   group('reconcileIdsForReadNumbers', () {
@@ -70,10 +81,19 @@ void main() {
       expect(navigation.map((chapter) => chapter.id), [2, 3]);
     });
 
-    test('leaves unnumbered chapters independent', () {
+    test('skips duplicate Chapter 0 releases', () {
       final navigation = skipDuplicateChaptersForNavigation([
-        ch(id: 1, number: 0),
-        ch(id: 2, number: 0),
+        ch(id: 1, number: 0, scanlator: 'A'),
+        ch(id: 2, number: 0, scanlator: 'B'),
+        ch(id: 3, number: 1, scanlator: 'A'),
+      ], keepChapterId: 1);
+      expect(navigation.map((chapter) => chapter.id), [1, 3]);
+    });
+
+    test('leaves negative-numbered chapters independent', () {
+      final navigation = skipDuplicateChaptersForNavigation([
+        ch(id: 1, number: -1),
+        ch(id: 2, number: -1),
       ], keepChapterId: 1);
       expect(navigation.map((chapter) => chapter.id), [1, 2]);
     });

@@ -25,7 +25,8 @@ String scanlatorGroupOf(ChapterDto c) =>
 /// number, else the copy the source lists first. All of the winning group's
 /// entries at that number survive (split chapters / v2 re-uploads share a
 /// number). Rows carry aggregate read/downloaded/bookmarked state across ALL
-/// copies of the number. Entries with chapterNumber <= 0 pass through.
+/// copies of the number. Entries with negative or invalid chapter numbers pass
+/// through.
 List<ChapterDto> applyPreferredScanlators(
   List<ChapterDto> chapters,
   List<String> preferred, {
@@ -35,7 +36,7 @@ List<ChapterDto> applyPreferredScanlators(
 
   final byNumber = <double, List<ChapterDto>>{};
   for (final c in chapters) {
-    if (c.chapterNumber > 0) {
+    if (c.chapterNumber >= 0) {
       byNumber.putIfAbsent(c.chapterNumber, () => []).add(c);
     }
   }
@@ -70,8 +71,8 @@ List<ChapterDto> applyPreferredScanlators(
 
   return [
     for (final c in chapters)
-      // Negated: `!(x > 0)` also catches NaN, unlike `x <= 0`.
-      if (!(c.chapterNumber > 0))
+      // Negated: `!(x >= 0)` also catches NaN, unlike `x < 0`.
+      if (!(c.chapterNumber >= 0))
         c
       else if (scanlatorGroupOf(c) == winnersByNumber[c.chapterNumber])
         c.copyWith(
@@ -83,11 +84,11 @@ List<ChapterDto> applyPreferredScanlators(
 }
 
 /// Ids of every copy sharing [chapterId]'s chapter number (self included).
-/// Number <= 0 or unknown id: just the id itself.
+/// A negative/invalid number or unknown id returns just the id itself.
 List<int> duplicateChapterIds(List<ChapterDto> allChapters, int chapterId) {
   final chapter = allChapters.firstWhereOrNull((c) => c.id == chapterId);
   // Same NaN-safe negation as applyPreferredScanlators.
-  if (chapter == null || !(chapter.chapterNumber > 0)) return [chapterId];
+  if (chapter == null || !(chapter.chapterNumber >= 0)) return [chapterId];
   return [
     for (final c in allChapters)
       if (c.chapterNumber == chapter.chapterNumber) c.id,
@@ -108,18 +109,18 @@ List<int> expandIdsForDuplicates(
   return out.toList();
 }
 
-/// Keeps one entry for each positive chapter number while navigating the
+/// Keeps one entry for each non-negative chapter number while navigating the
 /// reader. If the open chapter is one of several same-number releases, it is
 /// retained so the reader does not swap its in-flight chapter underneath it.
-/// Non-positive numbers remain distinct because they are not reliable chapter
-/// numbers.
+/// Negative or invalid numbers remain distinct because they are not reliable
+/// chapter numbers.
 List<ChapterDto> skipDuplicateChaptersForNavigation(
   List<ChapterDto> chapters, {
   required int keepChapterId,
 }) {
   final selectedByNumber = <double, ChapterDto>{};
   for (final chapter in chapters) {
-    if (!(chapter.chapterNumber > 0)) continue;
+    if (!(chapter.chapterNumber >= 0)) continue;
     if (chapter.id == keepChapterId) {
       selectedByNumber[chapter.chapterNumber] = chapter;
     } else {
@@ -129,7 +130,7 @@ List<ChapterDto> skipDuplicateChaptersForNavigation(
 
   return [
     for (final chapter in chapters)
-      if (!(chapter.chapterNumber > 0) ||
+      if (!(chapter.chapterNumber >= 0) ||
           selectedByNumber[chapter.chapterNumber]?.id == chapter.id)
         chapter,
   ];
@@ -140,7 +141,7 @@ List<ChapterDto> skipDuplicateChaptersForNavigation(
 List<int> reconcileIdsForReadNumbers(List<ChapterDto> allChapters) {
   final readNumbers = <double>{
     for (final c in allChapters)
-      if (c.isRead && c.chapterNumber > 0) c.chapterNumber,
+      if (c.isRead && c.chapterNumber >= 0) c.chapterNumber,
   };
   return [
     for (final c in allChapters)

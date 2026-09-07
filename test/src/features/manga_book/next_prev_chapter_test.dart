@@ -58,9 +58,9 @@ Future<ProviderContainer> _container(List<ChapterDto> chapters) async {
 
 void main() {
   final chapters = [
-    _chapter(id: 1, name: 'One', sourceOrder: 1),
-    _chapter(id: 2, name: 'Two', sourceOrder: 2),
-    _chapter(id: 3, name: 'Three', sourceOrder: 3),
+    _chapter(id: 1, name: 'One', number: 1, sourceOrder: 1),
+    _chapter(id: 2, name: 'Two', number: 2, sourceOrder: 2),
+    _chapter(id: 3, name: 'Three', number: 3, sourceOrder: 3),
   ];
 
   test('a chapter absent from the filtered list has NO neighbours', () async {

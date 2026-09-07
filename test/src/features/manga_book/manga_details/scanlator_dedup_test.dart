@@ -75,13 +75,13 @@ void main() {
       expect(rows.map((c) => c.id), [1, 2]);
     });
 
-    test('chapterNumber <= 0 passes through undeduped', () {
+    test('Chapter 0 dedups like every other numbered chapter', () {
       final rows = applyPreferredScanlators([
         ch(id: 1, number: 0, scanlator: 'A'),
         ch(id: 2, number: 0, scanlator: 'B'),
         ch(id: 3, number: -1, scanlator: 'A'),
       ], const ['A']);
-      expect(rows.length, 3);
+      expect(rows.map((chapter) => chapter.id), [1, 3]);
     });
 
     test('blank scanlator is rankable as the Unknown group', () {
@@ -133,13 +133,13 @@ void main() {
       expect(rows.single.id, 2);
     });
 
-    test('keepChapterId on a passthrough (<= 0) row changes nothing', () {
+    test('keepChapterId on Chapter 0 retains the in-flight copy', () {
       final rows = applyPreferredScanlators([
         ch(id: 1, number: 0, scanlator: 'A'),
         ch(id: 2, number: 0, scanlator: 'B'),
         ch(id: 3, number: 1, scanlator: 'B'),
       ], const ['B'], keepChapterId: 1);
-      expect(rows.map((c) => c.id), [1, 2, 3]);
+      expect(rows.map((c) => c.id), [1, 3]);
     });
 
     test('aggregation preserves the winner copy\'s other fields', () {
@@ -171,8 +171,8 @@ void main() {
     test('returns every copy of the chapter number, self included', () {
       expect(duplicateChapterIds(list, 1), unorderedEquals([1, 2]));
     });
-    test('number <= 0 returns only self', () {
-      expect(duplicateChapterIds(list, 4), [4]);
+    test('Chapter 0 returns every copy', () {
+      expect(duplicateChapterIds(list, 4), unorderedEquals([4, 5]));
     });
     test('unknown id returns only itself', () {
       expect(duplicateChapterIds(list, 99), [99]);
