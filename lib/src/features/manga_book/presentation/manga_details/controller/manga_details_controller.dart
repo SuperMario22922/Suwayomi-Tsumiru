@@ -415,6 +415,7 @@ AsyncValue<List<ChapterDto>?> mangaChapterListWithFilter(
   Ref ref, {
   required int mangaId,
   int? keepChapterId,
+  String? readerScanlatorGroup,
 }) {
   final chapterList = ref.watch(mangaChapterListProvider(mangaId: mangaId));
   final chapterFilterUnread = ref.watch(mangaChapterFilterUnreadProvider);
@@ -486,7 +487,13 @@ AsyncValue<List<ChapterDto>?> mangaChapterListWithFilter(
 
   return chapterList.copyWithData((data) {
     var list = data ?? const <ChapterDto>[];
-    if (dedupActive) {
+    if (readerScanlatorGroup != null) {
+      list = applyReaderSessionScanlator(
+        list,
+        scanlatorGroup: readerScanlatorGroup,
+        keepChapterId: keepChapterId,
+      );
+    } else if (dedupActive) {
       // Dedup BEFORE filters: filters must see aggregate row state, or an
       // unread filter would strip a read copy and silently swap the winner.
       list = applyPreferredScanlators(
@@ -550,6 +557,7 @@ ChapterDto? firstUnreadInFilteredChapterList(Ref ref, {required int mangaId}) {
   required int mangaId,
   required int chapterId,
   bool shouldAscSort = true,
+  String? readerScanlatorGroup,
 }) {
   final isAscSorted =
       ref.watch(mangaChapterSortDirectionProvider) ??
@@ -559,6 +567,7 @@ ChapterDto? firstUnreadInFilteredChapterList(Ref ref, {required int mangaId}) {
         mangaChapterListWithFilterProvider(
           mangaId: mangaId,
           keepChapterId: chapterId,
+          readerScanlatorGroup: readerScanlatorGroup,
         ),
       )
       .value;

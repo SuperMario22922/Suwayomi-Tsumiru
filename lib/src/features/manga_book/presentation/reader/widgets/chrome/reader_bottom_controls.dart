@@ -20,6 +20,7 @@ import '../../../../domain/chapter/chapter_model.dart';
 import '../../../../domain/chapter_page/chapter_page_model.dart';
 import '../../../../widgets/download_status_icon.dart';
 import '../../../manga_details/controller/manga_details_controller.dart';
+import '../../../manga_details/controller/scanlator_dedup.dart';
 import '../../utils/reader_mode_kind.dart';
 import '../brand_page_seekbar.dart';
 import '../reader_mode/infinity_continuous/measure_size.dart';
@@ -39,6 +40,7 @@ class ReaderBottomControls extends ConsumerWidget {
     super.key,
     required this.chapter,
     required this.chapterPages,
+    required this.readerScanlatorGroup,
     required this.currentIndex,
     required this.totalPageCount,
     required this.useBottomSeekBar,
@@ -54,6 +56,7 @@ class ReaderBottomControls extends ConsumerWidget {
 
   final ChapterDto chapter;
   final ChapterPagesDto chapterPages;
+  final String readerScanlatorGroup;
   final int currentIndex;
 
   /// For infinity-scroll mode; null means use [chapterPages.chapter.pageCount].
@@ -167,7 +170,8 @@ class ReaderBottomControls extends ConsumerWidget {
               shape: const RoundedRectangleBorder(),
               margin: EdgeInsets.zero,
               child: Padding(
-                padding: KEdgeInsets.h16.size +
+                padding:
+                    KEdgeInsets.h16.size +
                     EdgeInsets.only(bottom: systemBottomInset),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -178,6 +182,7 @@ class ReaderBottomControls extends ConsumerWidget {
                         context: context,
                         mangaId: chapter.mangaId,
                         currentChapterId: chapter.id,
+                        readerScanlatorGroup: readerScanlatorGroup,
                         transVertical: scrollDirection == Axis.vertical,
                       ),
                     ),
@@ -218,28 +223,26 @@ class ReaderBottomControls extends ConsumerWidget {
 }
 
 IconData _readerModeIcon(ReaderMode mode) => switch (mode) {
-      ReaderMode.webtoon ||
-      ReaderMode.continuousVertical =>
-        Icons.public_rounded,
-      ReaderMode.singleHorizontalLTR ||
-      ReaderMode.singleHorizontalRTL ||
-      ReaderMode.singleVertical ||
-      ReaderMode.continuousHorizontalLTR ||
-      ReaderMode.continuousHorizontalRTL =>
-        Icons.menu_book_rounded,
-      ReaderMode.defaultReader => Icons.auto_stories_rounded,
-    };
+  ReaderMode.webtoon || ReaderMode.continuousVertical => Icons.public_rounded,
+  ReaderMode.singleHorizontalLTR ||
+  ReaderMode.singleHorizontalRTL ||
+  ReaderMode.singleVertical ||
+  ReaderMode.continuousHorizontalLTR ||
+  ReaderMode.continuousHorizontalRTL => Icons.menu_book_rounded,
+  ReaderMode.defaultReader => Icons.auto_stories_rounded,
+};
 
 IconData _pageLayoutIcon(PageLayout pageLayout) => switch (pageLayout) {
-      PageLayout.singlePage => Icons.menu_book_rounded,
-      PageLayout.doublePages => Icons.chrome_reader_mode_rounded,
-      PageLayout.automatic => Icons.auto_stories_rounded,
-    };
+  PageLayout.singlePage => Icons.menu_book_rounded,
+  PageLayout.doublePages => Icons.chrome_reader_mode_rounded,
+  PageLayout.automatic => Icons.auto_stories_rounded,
+};
 
 Future<void> _showChapterPicker({
   required BuildContext context,
   required int mangaId,
   required int currentChapterId,
+  required String readerScanlatorGroup,
   required bool transVertical,
 }) {
   final readerContext = context;
@@ -269,6 +272,7 @@ Future<void> _showChapterPicker({
                   mangaChapterListWithFilterProvider(
                     mangaId: mangaId,
                     keepChapterId: currentChapterId,
+                    readerScanlatorGroup: readerScanlatorGroup,
                   ),
                 );
                 return chapters.showUiWhenData(
@@ -351,18 +355,21 @@ class _ReaderChapterSheet extends StatelessWidget {
             itemBuilder: (context, index) {
               final chapter = chapters[index];
               final isCurrent = chapter.id == currentChapterId;
-              final lastPageRead =
-                  chapter.lastPageRead.getValueOnNullOrNegative();
+              final lastPageRead = chapter.lastPageRead
+                  .getValueOnNullOrNegative();
               return ListTile(
                 dense: true,
-                visualDensity:
-                    const VisualDensity(horizontal: -1, vertical: -3),
+                visualDensity: const VisualDensity(
+                  horizontal: -1,
+                  vertical: -3,
+                ),
                 minLeadingWidth: 24,
                 minVerticalPadding: 0,
                 contentPadding: const EdgeInsets.only(left: 16, right: 8),
                 selected: isCurrent,
-                selectedTileColor:
-                    colorScheme.primaryContainer.withValues(alpha: 0.55),
+                selectedTileColor: colorScheme.primaryContainer.withValues(
+                  alpha: 0.55,
+                ),
                 selectedColor: colorScheme.onPrimaryContainer,
                 leading: Icon(
                   chapter.isRead.ifNull()
@@ -419,6 +426,7 @@ class _ReaderChapterSheet extends StatelessWidget {
                     ReaderRoute(
                       mangaId: mangaId,
                       chapterId: chapter.id,
+                      readerScanlatorGroup: scanlatorGroupOf(chapter),
                       showReaderLayoutAnimation: true,
                       transVertical: transVertical,
                     ).pushReplacement(readerContext);

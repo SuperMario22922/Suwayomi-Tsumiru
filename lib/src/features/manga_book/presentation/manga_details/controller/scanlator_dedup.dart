@@ -136,6 +136,52 @@ List<ChapterDto> skipDuplicateChaptersForNavigation(
   ];
 }
 
+/// One reader-session row per numbered chapter. The scanlator of the chapter
+/// used to open the reader wins whenever it has that chapter; otherwise the
+/// source's first release is used. This intentionally ignores the manga's
+/// saved scanlator preference.
+List<ChapterDto> applyReaderSessionScanlator(
+  List<ChapterDto> chapters, {
+  required String scanlatorGroup,
+  int? keepChapterId,
+}) {
+  final byNumber = <double, List<ChapterDto>>{};
+  for (final chapter in chapters) {
+    if (chapter.chapterNumber >= 0) {
+      byNumber.putIfAbsent(chapter.chapterNumber, () => []).add(chapter);
+    }
+  }
+  final selected = <double, ChapterDto>{
+    for (final entry in byNumber.entries)
+      entry.key:
+          entry.value.firstWhereOrNull(
+            (chapter) => keepChapterId != null && chapter.id == keepChapterId,
+          ) ??
+          entry.value.firstWhereOrNull(
+            (chapter) => scanlatorGroupOf(chapter) == scanlatorGroup,
+          ) ??
+          entry.value.reduce(
+            (first, next) =>
+                first.sourceOrder <= next.sourceOrder ? first : next,
+          ),
+  };
+  return [
+    for (final chapter in chapters)
+      if (chapter.chapterNumber < 0 || chapter.chapterNumber.isNaN)
+        chapter
+      else if (selected[chapter.chapterNumber]?.id == chapter.id)
+        chapter.copyWith(
+          isRead: byNumber[chapter.chapterNumber]!.any((x) => x.isRead),
+          isDownloaded: byNumber[chapter.chapterNumber]!.any(
+            (x) => x.isDownloaded,
+          ),
+          isBookmarked: byNumber[chapter.chapterNumber]!.any(
+            (x) => x.isBookmarked,
+          ),
+        ),
+  ];
+}
+
 /// Unread copies whose chapter number has at least one read copy — the
 /// one-time catch-up set when a preference is set on a series with history.
 List<int> reconcileIdsForReadNumbers(List<ChapterDto> allChapters) {

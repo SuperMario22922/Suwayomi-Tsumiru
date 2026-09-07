@@ -22,7 +22,10 @@ class RecommendsRoute extends GoRouteData with $RecommendsRoute {
 }
 
 class RecommendsBrowseRoute extends GoRouteData with $RecommendsBrowseRoute {
-  const RecommendsBrowseRoute({required this.mangaId, required this.providerName});
+  const RecommendsBrowseRoute({
+    required this.mangaId,
+    required this.providerName,
+  });
   final int mangaId;
   final String providerName;
 
@@ -44,6 +47,7 @@ class ReaderRoute extends GoRouteData with $ReaderRoute {
     required this.chapterId,
     this.transVertical,
     this.toPrev,
+    this.readerScanlatorGroup,
     this.showReaderLayoutAnimation = false,
     this.openAtEnd = false,
   });
@@ -51,6 +55,7 @@ class ReaderRoute extends GoRouteData with $ReaderRoute {
   final int chapterId;
   final bool? transVertical;
   final bool? toPrev;
+  final String? readerScanlatorGroup;
   final bool showReaderLayoutAnimation;
   final bool openAtEnd;
 
@@ -63,6 +68,7 @@ class ReaderRoute extends GoRouteData with $ReaderRoute {
       child: ReaderScreen(
         mangaId: mangaId,
         chapterId: chapterId,
+        readerScanlatorGroup: readerScanlatorGroup,
         showReaderLayoutAnimation: showReaderLayoutAnimation,
         openAtEnd: openAtEnd,
       ),
@@ -97,7 +103,8 @@ class _ReaderRouteTransition extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final background = ref.watch(readerBackgroundColorKeyProvider) ??
+    final background =
+        ref.watch(readerBackgroundColorKeyProvider) ??
         DBKeys.readerBackgroundColor.initial as ReaderBackgroundColor;
     return ColoredBox(
       color: background.color(context),
