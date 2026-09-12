@@ -27,6 +27,7 @@ import '../../../../domain/chapter/chapter_model.dart';
 import '../../../../domain/chapter_page/chapter_page_model.dart';
 import '../../../../domain/manga/manga_model.dart';
 import '../../../manga_details/controller/manga_details_controller.dart';
+import '../../../manga_details/controller/scanlator_dedup.dart';
 import '../../controller/auto_scroll_controller.dart';
 import '../../controller/reader_controller.dart';
 import '../../controller/reader_settings_model.dart';
@@ -271,6 +272,9 @@ class MultiChapterPagedReaderMode extends HookConsumerWidget {
     // through the offline-safe recordReadingProgress path.
     final progressDebounce = useRef<Timer?>(null);
     final latestProgress = useRef<({int chapterId, int rel})?>(null);
+    final allChaptersForFlush = useRef<List<ChapterDto>?>(null);
+    allChaptersForFlush.value =
+        ref.watch(mangaChapterListProvider(mangaId: manga.id)).value;
 
     Future<void> writeVisibleProgress(int chapterId, int rel) async {
       if (ref.read(incognitoModeProvider)) return;
@@ -360,9 +364,9 @@ class MultiChapterPagedReaderMode extends HookConsumerWidget {
         final lc = loadedById(p.chapterId);
         final pageCount = lc?.pages.pages.length ?? 0;
         final isCompletion = pageCount > 0 && p.rel >= pageCount - 1;
-        // Fire-and-forget so leaving mid-chapter still saves the spot; no
-        // scanlator-duplicate expansion here since this only persists a
-        // position, not a completion.
+        // Fire-and-forget so leaving mid-chapter still saves the spot. A
+        // completion carries the same conservative release expansion as the
+        // normal reader path; a partial position remains scoped to this row.
         recordReadingProgressWithDependencies(
           offlineEnabled: offlineEnabledForFlush,
           offlineDatabase: offlineDbForFlush,
@@ -370,6 +374,12 @@ class MultiChapterPagedReaderMode extends HookConsumerWidget {
           chapterId: p.chapterId,
           lastPageRead: isCompletion ? 0 : p.rel,
           isRead: isCompletion,
+          completionChapterIds: isCompletion
+              ? expandIdsForDuplicates(
+                  allChaptersForFlush.value,
+                  [p.chapterId],
+                )
+              : null,
         ).ignore();
       };
     }, const []);

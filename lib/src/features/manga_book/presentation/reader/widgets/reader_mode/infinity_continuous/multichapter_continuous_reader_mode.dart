@@ -40,6 +40,7 @@ import '../../../../../domain/chapter/chapter_model.dart';
 import '../../../../../domain/chapter_page/chapter_page_model.dart';
 import '../../../../../domain/manga/manga_model.dart';
 import '../../../../manga_details/controller/manga_details_controller.dart';
+import '../../../../manga_details/controller/scanlator_dedup.dart';
 import '../../../controller/auto_scroll_controller.dart';
 import '../../../controller/reader_controller.dart';
 import '../../../utils/flush_progress_on_lifecycle.dart';
@@ -281,6 +282,9 @@ class MultiChapterContinuousReaderMode extends HookConsumerWidget {
     // recordReadingProgress path so a read made offline is queued, not lost.
     final progressDebounce = useRef<Timer?>(null);
     final latestProgress = useRef<({int chapterId, int rel})?>(null);
+    final allChaptersForFlush = useRef<List<ChapterDto>?>(null);
+    allChaptersForFlush.value =
+        ref.watch(mangaChapterListProvider(mangaId: manga.id)).value;
 
     _LoadedChapter? loadedById(int id) {
       for (final c in loadedRef.value) {
@@ -413,16 +417,24 @@ class MultiChapterContinuousReaderMode extends HookConsumerWidget {
         final lc = loadedById(p.chapterId);
         final pageCount = lc?.pages.pages.length ?? 0;
         final isCompletion = pageCount > 0 && p.rel >= pageCount - 1;
-        unawaited(
-          offlineDbForFlush
-              .setChapterProgress(
-                p.chapterId,
-                lastPageRead: isCompletion ? 0 : p.rel,
-                // Never un-read on a teardown flush: only a completion marks read.
-                isRead: isCompletion ? true : null,
+        final chapterIds = isCompletion
+            ? expandIdsForDuplicates(
+                allChaptersForFlush.value,
+                [p.chapterId],
               )
-              .catchError((_) {}),
-        );
+            : [p.chapterId];
+        for (final chapterId in chapterIds) {
+          unawaited(
+            offlineDbForFlush
+                .setChapterProgress(
+                  chapterId,
+                  lastPageRead: isCompletion ? 0 : p.rel,
+                  // Never un-read on a teardown flush: only a completion marks read.
+                  isRead: isCompletion ? true : null,
+                )
+                .catchError((_) {}),
+          );
+        }
       };
     }, const []);
 

@@ -31,6 +31,7 @@ import '../../manga_book/data/manga_book/manga_book_repository.dart';
 import '../../manga_book/domain/chapter_batch/chapter_batch_model.dart';
 import '../../manga_book/presentation/manga_details/controller/manga_details_controller.dart';
 import '../../manga_book/presentation/manga_details/controller/scanlator_dedup.dart';
+import '../../manga_book/presentation/manga_details/controller/scanlator_propagation.dart';
 import '../../notifications/controller/notifications_controller.dart';
 import '../../settings/presentation/downloads/data/delete_chapters_settings_repository.dart';
 import '../../settings/presentation/server/widget/client/server_port_tile/server_port_tile.dart';
@@ -312,6 +313,13 @@ Future<AsyncValue<void>> recordReadingProgress(
   required bool isRead,
 }) async {
   final offline = ref.read(offlineActiveProvider);
+  final completionChapterIds = isRead
+      ? expandIdsAcrossScanlators(
+          ref,
+          mangaId: mangaId,
+          chapterIds: [chapterId],
+        )
+      : null;
   final result = await recordReadingProgressWithDependencies(
     offlineEnabled: offline,
     offlineDatabase: offline ? ref.read(offlineDatabaseProvider) : null,
@@ -319,6 +327,7 @@ Future<AsyncValue<void>> recordReadingProgress(
     chapterId: chapterId,
     lastPageRead: lastPageRead,
     isRead: isRead,
+    completionChapterIds: completionChapterIds,
   );
   return result;
 }
@@ -333,7 +342,28 @@ Future<AsyncValue<void>> recordReadingProgressWithDependencies({
   required int chapterId,
   required int lastPageRead,
   required bool isRead,
+  List<int>? completionChapterIds,
 }) async {
+  if (isRead &&
+      completionChapterIds != null &&
+      completionChapterIds.length > 1) {
+    final result = await _recordReadStateResultWithDependencies(
+      offlineEnabled: offlineEnabled,
+      offlineDatabase: offlineDatabase,
+      repository: repository,
+      chapterIds: completionChapterIds,
+      isRead: true,
+      resetPosition: true,
+      manual: false,
+    );
+    if (result.hasError && offlineEnabled && offlineDatabase != null) {
+      final e = result.error!;
+      final cause = e is OperationMessageException ? e.exception : e;
+      if (isConnectionError(cause)) return const AsyncValue.data(null);
+    }
+    return result;
+  }
+
   // Reading forward never un-reads: partial writes record position only (isRead
   // omitted); only completion marks read. Mark-unread is a separate path.
   final bool? markRead = isRead ? true : null;
@@ -421,6 +451,27 @@ Future<bool> recordReadStateWithDependencies({
   required bool isRead,
   bool resetPosition = false,
 }) async {
+  final result = await _recordReadStateResultWithDependencies(
+    offlineEnabled: offlineEnabled,
+    offlineDatabase: offlineDatabase,
+    repository: repository,
+    chapterIds: chapterIds,
+    isRead: isRead,
+    resetPosition: resetPosition,
+    manual: true,
+  );
+  return !result.hasError;
+}
+
+Future<AsyncValue<void>> _recordReadStateResultWithDependencies({
+  required bool offlineEnabled,
+  required OfflineDatabase? offlineDatabase,
+  required MangaBookRepository repository,
+  required List<int> chapterIds,
+  required bool isRead,
+  required bool resetPosition,
+  required bool manual,
+}) async {
   final db = offlineDatabase;
   if (offlineEnabled && db != null) {
     for (final id in chapterIds) {
@@ -429,7 +480,7 @@ Future<bool> recordReadStateWithDependencies({
           id,
           lastPageRead: 0,
           isRead: isRead,
-          manual: true,
+          manual: manual,
         );
       } else {
         await db.setChapterReadState(id, isRead);
@@ -454,7 +505,7 @@ Future<bool> recordReadStateWithDependencies({
       }
     }
   }
-  return !result.hasError;
+  return result;
 }
 
 /// Widget entry point for [recordReadStateWithDependencies] — resolves the
