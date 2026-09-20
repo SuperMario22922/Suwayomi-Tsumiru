@@ -14,10 +14,8 @@ import 'package:tsumiru/src/utils/network/paginate.dart';
 void main() {
   // Builds a fetchPage that serves [pages] in order, matching the requested
   // cursor, and records every cursor it was asked for.
-  ({
-    Future<PaginatedPage<int>?> Function(int?) fetch,
-    List<int?> cursors,
-  }) pager(List<PaginatedPage<int>?> pages) {
+  ({Future<PaginatedPage<int>?> Function(int?) fetch, List<int?> cursors})
+  pager(List<PaginatedPage<int>?> pages) {
     final cursors = <int?>[];
     var i = 0;
     Future<PaginatedPage<int>?> fetch(int? after) async {
@@ -55,15 +53,17 @@ void main() {
     expect(await collectAllPages<int>(p.fetch), isNull);
   });
 
-  test('a truncated response (fewer nodes than totalCount) returns null',
-      () async {
-    // Server claims 5 but stops advertising more after 3 — exactly the partial
-    // fetch that must not reach the prune.
-    final p = pager([
-      (nodes: [1, 2, 3], hasNextPage: false, endCursor: null, totalCount: 5),
-    ]);
-    expect(await collectAllPages<int>(p.fetch), isNull);
-  });
+  test(
+    'a truncated response (fewer nodes than totalCount) returns null',
+    () async {
+      // Server claims 5 but stops advertising more after 3 — exactly the partial
+      // fetch that must not reach the prune.
+      final p = pager([
+        (nodes: [1, 2, 3], hasNextPage: false, endCursor: null, totalCount: 5),
+      ]);
+      expect(await collectAllPages<int>(p.fetch), isNull);
+    },
+  );
 
   test('hasNextPage true but a null cursor stops, and the count mismatch makes '
       'it null rather than a short list', () async {
@@ -81,12 +81,14 @@ void main() {
     expect(await collectAllPages<int>(p.fetch), isEmpty);
   });
 
-  test('paginated result whose assembled count matches totalCount passes',
-      () async {
-    final p = pager([
-      (nodes: [1, 2, 3], hasNextPage: true, endCursor: 30, totalCount: 4),
-      (nodes: [4], hasNextPage: false, endCursor: null, totalCount: 4),
-    ]);
-    expect(await collectAllPages<int>(p.fetch), [1, 2, 3, 4]);
-  });
+  test(
+    'paginated result whose assembled count matches totalCount passes',
+    () async {
+      final p = pager([
+        (nodes: [1, 2, 3], hasNextPage: true, endCursor: 30, totalCount: 4),
+        (nodes: [4], hasNextPage: false, endCursor: null, totalCount: 4),
+      ]);
+      expect(await collectAllPages<int>(p.fetch), [1, 2, 3, 4]);
+    },
+  );
 }

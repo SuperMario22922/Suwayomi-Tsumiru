@@ -54,108 +54,103 @@ void main() {
   // Normal protection window (slots=1) → empty: nothing is kept.
   // Rolling window boundary (slots=2) → {ch3}: the just-read chapter is kept
   // for one boundary, allowing the user to flip back to ch3 without a download.
-  group(
-    'rolling window with deleteWhileReading = 1 '
-    '(delete the just-read chapter)',
-    () {
-      // After reading ch1 → ch2 → ch3.
-      final chapters = [
-        _ch(1, isRead: true, readAt: '1000'),
-        _ch(2, isRead: true, readAt: '2000'),
-        _ch(3, isRead: true, readAt: '3000'),
-        _ch(4),
-        _ch(5),
-      ];
-      const deleteWhileReading = 1;
+  group('rolling window with deleteWhileReading = 1 '
+      '(delete the just-read chapter)', () {
+    // After reading ch1 → ch2 → ch3.
+    final chapters = [
+      _ch(1, isRead: true, readAt: '1000'),
+      _ch(2, isRead: true, readAt: '2000'),
+      _ch(3, isRead: true, readAt: '3000'),
+      _ch(4),
+      _ch(5),
+    ];
+    const deleteWhileReading = 1;
 
-      test(
-        'normal exit reconcile keeps no read chapters in the protection window',
-        () {
-          // slots = deleteWhileReading = 1 → readChaptersInDeleteWindow returns {}
-          expect(
-            readChaptersInDeleteWindow(chapters, deleteWhileReading),
-            isEmpty,
-            reason: 'delete-while-reading=1 targets the just-read chapter; '
-                'nothing to protect behind it',
-          );
-        },
-      );
+    test(
+      'normal exit reconcile keeps no read chapters in the protection window',
+      () {
+        // slots = deleteWhileReading = 1 → readChaptersInDeleteWindow returns {}
+        expect(
+          readChaptersInDeleteWindow(chapters, deleteWhileReading),
+          isEmpty,
+          reason:
+              'delete-while-reading=1 targets the just-read chapter; '
+              'nothing to protect behind it',
+        );
+      },
+    );
 
-      test(
-        'boundary reconcile (slots+1) protects the just-read chapter '
-        'so back-and-forth between ch2 and ch3 does not require a re-download',
-        () {
-          // slots = deleteWhileReading + 1 = 2 → keeps 1 most recently read
-          expect(
-            readChaptersInDeleteWindow(chapters, deleteWhileReading + 1),
-            {3},
-            reason: 'ch3 (just finished) is the most recently read; '
-                'keeping it at the boundary avoids a re-download on back-press',
-          );
-        },
-      );
+    test(
+      'boundary reconcile (slots+1) protects the just-read chapter '
+      'so back-and-forth between ch2 and ch3 does not require a re-download',
+      () {
+        // slots = deleteWhileReading + 1 = 2 → keeps 1 most recently read
+        expect(
+          readChaptersInDeleteWindow(chapters, deleteWhileReading + 1),
+          {3},
+          reason:
+              'ch3 (just finished) is the most recently read; '
+              'keeping it at the boundary avoids a re-download on back-press',
+        );
+      },
+    );
 
-      test(
-        'boundary window is a strict superset of exit window',
-        () {
-          final exitWindow =
-              readChaptersInDeleteWindow(chapters, deleteWhileReading);
-          final boundaryWindow =
-              readChaptersInDeleteWindow(chapters, deleteWhileReading + 1);
-          expect(
-            boundaryWindow.length,
-            greaterThan(exitWindow.length),
-            reason: 'boundary always protects at least one more read chapter '
-                'than the normal exit value',
-          );
-          expect(
-            boundaryWindow,
-            containsAll(exitWindow),
-            reason: 'every chapter the exit window protects is also protected '
-                'at the boundary',
-          );
-        },
+    test('boundary window is a strict superset of exit window', () {
+      final exitWindow = readChaptersInDeleteWindow(
+        chapters,
+        deleteWhileReading,
       );
-    },
-  );
+      final boundaryWindow = readChaptersInDeleteWindow(
+        chapters,
+        deleteWhileReading + 1,
+      );
+      expect(
+        boundaryWindow.length,
+        greaterThan(exitWindow.length),
+        reason:
+            'boundary always protects at least one more read chapter '
+            'than the normal exit value',
+      );
+      expect(
+        boundaryWindow,
+        containsAll(exitWindow),
+        reason:
+            'every chapter the exit window protects is also protected '
+            'at the boundary',
+      );
+    });
+  });
 
   // Second scenario: deleteWhileReading = 2 (delete the chapter two behind).
   // Normal protection window (slots=2) → {ch3}: the most recently read.
   // Rolling window boundary (slots=3) → {ch2, ch3}: two chapters protected.
-  group(
-    'rolling window with deleteWhileReading = 2 '
-    '(delete second-to-last read chapter)',
-    () {
-      final chapters = [
-        _ch(1, isRead: true, readAt: '1000'),
-        _ch(2, isRead: true, readAt: '2000'),
-        _ch(3, isRead: true, readAt: '3000'),
-        _ch(4),
-        _ch(5),
-      ];
-      const deleteWhileReading = 2;
+  group('rolling window with deleteWhileReading = 2 '
+      '(delete second-to-last read chapter)', () {
+    final chapters = [
+      _ch(1, isRead: true, readAt: '1000'),
+      _ch(2, isRead: true, readAt: '2000'),
+      _ch(3, isRead: true, readAt: '3000'),
+      _ch(4),
+      _ch(5),
+    ];
+    const deleteWhileReading = 2;
 
-      test('normal exit reconcile keeps only the most recently read chapter', () {
-        expect(
-          readChaptersInDeleteWindow(chapters, deleteWhileReading),
-          {3},
-          reason: 'slots=2 protects the 1 most recently read chapter (ch3)',
-        );
-      });
+    test('normal exit reconcile keeps only the most recently read chapter', () {
+      expect(readChaptersInDeleteWindow(chapters, deleteWhileReading), {
+        3,
+      }, reason: 'slots=2 protects the 1 most recently read chapter (ch3)');
+    });
 
-      test(
-        'boundary reconcile protects the two most recently read chapters',
-        () {
-          expect(
-            readChaptersInDeleteWindow(chapters, deleteWhileReading + 1),
-            {2, 3},
-            reason: 'slots=3 protects ch2 and ch3, giving extra breathing room '
-                'at the chapter boundary',
-          );
-        },
+    test('boundary reconcile protects the two most recently read chapters', () {
+      expect(
+        readChaptersInDeleteWindow(chapters, deleteWhileReading + 1),
+        {2, 3},
+        reason:
+            'slots=3 protects ch2 and ch3, giving extra breathing room '
+            'at the chapter boundary',
       );
-    },
-  );
+    });
+  });
 
   // Edge case: deleteWhileReading = 0 (delete-while-reading disabled).
   // Rolling window boundary raises to slots=1 which still keeps nothing (the
@@ -171,10 +166,7 @@ void main() {
     const deleteWhileReading = 0;
 
     test('exit reconcile keeps nothing (delete is off)', () {
-      expect(
-        readChaptersInDeleteWindow(chapters, deleteWhileReading),
-        isEmpty,
-      );
+      expect(readChaptersInDeleteWindow(chapters, deleteWhileReading), isEmpty);
     });
 
     test('boundary reconcile (slots+1 = 1) also keeps nothing', () {
@@ -182,7 +174,8 @@ void main() {
       expect(
         readChaptersInDeleteWindow(chapters, deleteWhileReading + 1),
         isEmpty,
-        reason: 'slots=1 triggers the ≤1 guard; the boundary reconcile still '
+        reason:
+            'slots=1 triggers the ≤1 guard; the boundary reconcile still '
             'runs for the nUnread download, but no delete protection applies',
       );
     });
@@ -204,7 +197,8 @@ void main() {
       expect(
         desiredChapterIds(chapters, OfflineKeepRule.nUnread, keepN),
         {3, 4},
-        reason: 'the two next unread chapters are ch3 and ch4 regardless of '
+        reason:
+            'the two next unread chapters are ch3 and ch4 regardless of '
             'which deleteWhileReadingSlots value the rolling window uses',
       );
     });

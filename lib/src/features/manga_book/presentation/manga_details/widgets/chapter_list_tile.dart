@@ -36,7 +36,8 @@ class ChapterListTile extends ConsumerWidget {
   final bool isSelected;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final showChapterNumber = ref.watch(mangaChapterDisplayModeProvider) ==
+    final showChapterNumber =
+        ref.watch(mangaChapterDisplayModeProvider) ==
         ChapterDisplay.chapterNumber;
     final scanlator = chapter.scanlator.isNotBlank
         ? chapter.scanlator!
@@ -51,8 +52,9 @@ class ChapterListTile extends ConsumerWidget {
             if (chapter.isBookmarked.ifNull()) ...[
               Icon(
                 Icons.bookmark_rounded,
-                color:
-                    chapter.isRead.ifNull() ? Colors.grey : context.iconColor,
+                color: chapter.isRead.ifNull()
+                    ? Colors.grey
+                    : context.iconColor,
                 size: 20,
               ),
               const Gap(4),
@@ -99,9 +101,7 @@ class ChapterListTile extends ConsumerWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            OfflineSaveButton(
-              chapterId: chapter.id,
-            ),
+            OfflineSaveButton(chapterId: chapter.id),
             // Local source: the files are already on the server, so there is
             // nothing to download there (Komikku parity).
             if (!manga.isLocalSource)
@@ -114,16 +114,17 @@ class ChapterListTile extends ConsumerWidget {
           ],
         ),
         selectedColor: context.theme.colorScheme.onSurface,
-        selectedTileColor:
-            context.isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300,
+        selectedTileColor: context.isDarkMode
+            ? Colors.grey.shade700
+            : Colors.grey.shade300,
         selected: isSelected,
         onTap: canTapSelect
             ? () => toggleSelect(chapter)
             : () => ReaderRoute(
-                  mangaId: manga.id,
-                  chapterId: chapter.id,
-                  showReaderLayoutAnimation: true,
-                ).push(context),
+                mangaId: manga.id,
+                chapterId: chapter.id,
+                showReaderLayoutAnimation: true,
+              ).push(context),
         onLongPress: () => toggleSelect(chapter),
       ),
     );

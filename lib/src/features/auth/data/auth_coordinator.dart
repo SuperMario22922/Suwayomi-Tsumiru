@@ -5,6 +5,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import 'dart:async'; // Completer + Timer — required by single-flight + proactive refresh
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart'; // debugPrint
 import 'package:graphql/client.dart';
@@ -18,10 +19,17 @@ import '../../../global_providers/global_providers.dart';
 // auth.graphql.dart, so we import the schema directly.
 import '../../../graphql/__generated__/schema.graphql.dart'
     show Input$LoginInput, Input$RefreshTokenInput;
+import '../../account/data/account_notice.dart';
+import '../../account/data/account_session_repository.dart';
+import '../../account/domain/account_binding.dart';
+import '../../offline/data/offline_server_identity_repository.dart';
 import '../../onboarding/data/server_resolver.dart'
     show authProbeAuthorized, basicAuthConfirms;
+import '../../settings/presentation/general/timeout_settings/timeout_settings_section.dart';
+import '../../settings/presentation/server/widget/credential_popup/credentials_popup.dart';
 import 'auth_credentials_store.dart';
 import 'auth_state.dart';
+import 'basic_credentials_rejected.dart';
 import 'custom_headers_store.dart';
 import 'graphql/__generated__/auth.graphql.dart';
 import 'simple_login_client.dart';
@@ -50,6 +58,7 @@ enum TestConnectionFailureKind {
   wrongAuthMode,
   unexpectedShape,
   insecureTransport,
+  browserSession,
 }
 
 /// Maps a thrown error to a typed [TestConnectionFailure]. Used by both
@@ -61,9 +70,19 @@ enum TestConnectionFailureKind {
 /// like "connection" that would otherwise collapse them into a generic
 /// network failure.
 TestConnectionFailure classifyAuthError(Object e) {
+  if (e is BasicCredentialsRejected) {
+    return const TestConnectionFailure(
+      TestConnectionFailureKind.invalidCredentials,
+    );
+  }
   if (e is SimpleLoginAuthFailure) {
     return const TestConnectionFailure(
       TestConnectionFailureKind.invalidCredentials,
+    );
+  }
+  if (e is SimpleLoginSessionFailure) {
+    return const TestConnectionFailure(
+      TestConnectionFailureKind.browserSession,
     );
   }
   if (e is SimpleLoginShapeFailure) {
@@ -131,20 +150,11 @@ class RefreshTransientFailure extends RefreshOutcome {
   final Object error;
 }
 
-/// Process-wide single-flight slot for UI Login refresh.
-///
-/// Held as a TOP-LEVEL static — not a notifier field — so it survives
-/// provider invalidation (Codex round-3 finding: if a Riverpod
-/// invalidate recreates [AuthCoordinator] mid-refresh, an instance
-/// field would silently allow a second concurrent refresh). The
-/// trade-off: tests that exercise the static must reset it via
-/// `debugResetAuthCoordinatorSingleFlight()` in `setUp`.
-Completer<RefreshOutcome>? _refreshInFlight;
+Expando<Completer<RefreshOutcome>> _refreshInFlight = Expando();
 
-/// Test hook to clear the file-static single-flight slot between tests.
 @visibleForTesting
 void debugResetAuthCoordinatorSingleFlight() {
-  _refreshInFlight = null;
+  _refreshInFlight = Expando();
 }
 
 /// Extracts an HTTP status code from a graphql_flutter [LinkException],
@@ -209,6 +219,10 @@ class AuthCoordinator extends _$AuthCoordinator {
     ) {
       final state = next.value;
       if (state == null) return;
+      if (!ref.read(authCredentialsStoreProvider.notifier).sessionAdmitted) {
+        _cancelProactiveRefresh();
+        return;
+      }
       if (state.uiAccessToken == null || state.uiAccessTokenExpiresAt == null) {
         _cancelProactiveRefresh();
         return;
@@ -226,13 +240,6 @@ class AuthCoordinator extends _$AuthCoordinator {
     ref.onDispose(_cancelProactiveRefresh);
   }
 
-  /// (Re)schedules the proactive refresh Timer from the currently-stored
-  /// `uiAccessTokenExpiresAt`. Idempotent — cancels any existing Timer
-  /// first. No-op if there is no expiry (logout / non-ui mode).
-  ///
-  /// Does NOT capture a [GraphQLClient] — [_firePeriodicRefresh] reads
-  /// `graphQlClientProvider` fresh when the Timer actually fires (see its
-  /// doc comment for why capturing one here was a bug).
   void _scheduleProactiveRefresh() {
     _proactiveRefreshTimer?.cancel();
     _proactiveRefreshTimer = null;
@@ -270,22 +277,9 @@ class AuthCoordinator extends _$AuthCoordinator {
     });
   }
 
-  /// Common Timer body — calls `refreshUiAccessToken` and dispatches
-  /// the next schedule based on outcome.
-  ///
-  /// Reads `graphQlClientProvider` fresh on every firing instead of taking
-  /// it as a parameter. It used to be threaded through from whichever
-  /// `ref.read(graphQlClientProvider)` happened at the FIRST schedule (in
-  /// `build()`'s credentials listener) and reused for every reschedule
-  /// after that — a transient-failure backoff loop, or a success reschedule
-  /// racing the credentials listener's own reschedule, could keep closing
-  /// over that same original client forever. A server switch (or any other
-  /// change that rebuilds `graphQlClientProvider`) mid-loop then left the
-  /// proactive refresh silently retrying against the OLD server
-  /// indefinitely, since nothing else re-reads the provider on this path.
   Future<void> _firePeriodicRefresh() async {
     try {
-      final gqlClient = ref.read(graphQlClientProvider);
+      final gqlClient = ref.read(unauthenticatedGraphQlClientProvider);
       final outcome = await refreshUiAccessToken(gqlClient: gqlClient);
       if (outcome is RefreshSuccess) {
         _proactiveBackoffStep = 0;
@@ -340,13 +334,23 @@ class AuthCoordinator extends _$AuthCoordinator {
     required String username,
     required String password,
   }) async {
-    final client = SimpleLoginClient();
-    return await client.login(
-      serverBaseUrl: serverBaseUrl,
-      username: username,
-      password: password,
-      extraHeaders: ref.read(customHttpHeadersProvider).value,
+    final client = SimpleLoginClient(
+      timeout: Duration(
+        milliseconds:
+            ref.read(serverRequestTimeoutProvider) ??
+            DBKeys.serverRequestTimeout.initial as int,
+      ),
     );
+    try {
+      return await client.login(
+        serverBaseUrl: serverBaseUrl,
+        username: username,
+        password: password,
+        extraHeaders: ref.read(customHttpHeadersProvider).value,
+      );
+    } finally {
+      client.close();
+    }
   }
 
   /// Verifies UI Login credentials by firing the `login` mutation.
@@ -379,6 +383,43 @@ class AuthCoordinator extends _$AuthCoordinator {
 
   // ---------- Persisting login paths ----------
 
+  /// Verifies Basic credentials against the server AND persists them.
+  ///
+  /// basic_auth has no login round-trip, so this probes with the header the
+  /// app would go on to send. Without it a typo was stored happily and the
+  /// user was shown as signed in while every request came back 401.
+  Future<void> loginBasic({
+    required String serverBaseUrl,
+    required String username,
+    required String password,
+  }) async {
+    final store = ref.read(authCredentialsStoreProvider.notifier);
+    await store.withIdentityChange(() async {
+      final epoch = store.serverEpoch;
+      final client = http.Client();
+      final bool authorized;
+      try {
+        authorized = await authProbeAuthorized(
+          serverBaseUrl,
+          client: client,
+          basic: '$username:$password',
+          extraHeaders: ref.read(customHttpHeadersProvider).value,
+        );
+      } finally {
+        client.close();
+      }
+      if (!authorized) throw const BasicCredentialsRejected();
+      await ref
+          .read(credentialsProvider.notifier)
+          .set(
+            'Basic ${base64.encode(utf8.encode('$username:$password'))}',
+            forEpoch: epoch,
+          );
+      await store.savePassword(password, forEpoch: epoch);
+      ref.read(needsReauthProvider.notifier).set(false);
+    }, expectedEpoch: store.serverEpoch);
+  }
+
   /// Performs Simple Login AND persists the resulting cookie + password.
   /// Equivalent to `verifySimpleCredentials` + a store write. Used by
   /// the credentials popup's Save button.
@@ -389,15 +430,17 @@ class AuthCoordinator extends _$AuthCoordinator {
   }) async {
     final store = ref.read(authCredentialsStoreProvider.notifier);
     // Capture before verify so a switch mid-login can't persist creds for the new host.
-    final epoch = store.serverEpoch;
-    final cookie = await verifySimpleCredentials(
-      serverBaseUrl: serverBaseUrl,
-      username: username,
-      password: password,
-    );
-    await store.saveSimpleLoginCookie(cookie, forEpoch: epoch);
-    await store.savePassword(password, forEpoch: epoch);
-    ref.read(needsReauthProvider.notifier).set(false);
+    await store.withIdentityChange(() async {
+      final epoch = store.serverEpoch;
+      final cookie = await verifySimpleCredentials(
+        serverBaseUrl: serverBaseUrl,
+        username: username,
+        password: password,
+      );
+      await store.saveSimpleLoginCookie(cookie, forEpoch: epoch);
+      await store.savePassword(password, forEpoch: epoch);
+      ref.read(needsReauthProvider.notifier).set(false);
+    }, expectedEpoch: store.serverEpoch);
   }
 
   /// Performs UI Login AND persists both tokens + password.
@@ -407,40 +450,88 @@ class AuthCoordinator extends _$AuthCoordinator {
     required String password,
   }) async {
     final store = ref.read(authCredentialsStoreProvider.notifier);
-    final epoch = store.serverEpoch;
-    final tokens = await verifyUiCredentials(
-      gqlClient: gqlClient,
-      username: username,
-      password: password,
-    );
-    await store.saveUiLoginTokens(
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      forEpoch: epoch,
-    );
-    await store.savePassword(password, forEpoch: epoch);
-    ref.read(needsReauthProvider.notifier).set(false);
+    await store.withIdentityChange(() async {
+      final epoch = store.serverEpoch;
+      final address = ref.read(currentServerAddressProvider);
+      final tokens = await verifyUiCredentials(
+        gqlClient: gqlClient,
+        username: username,
+        password: password,
+      );
+      await adoptUiLoginTokens(
+        gqlClient: gqlClient,
+        tokens: tokens,
+        forEpoch: epoch,
+        address: address,
+        username: username,
+        password: password,
+      );
+    }, expectedEpoch: store.serverEpoch);
   }
 
-  /// Calls the `refreshToken` mutation. Returns a typed [RefreshOutcome].
-  /// Process-wide single-flight is handled via the FILE-STATIC
-  /// `_refreshInFlight` Completer declared above this class (Codex
-  /// round-3 finding: instance-field placement breaks if the notifier
-  /// is invalidated mid-refresh).
-  ///
-  /// On `success`: updates the store's access token.
-  /// On `authFailure`: clears tokens and sets `needsReauth = true`.
-  /// On `transientFailure`: leaves state untouched; caller logs/retries.
-  ///
-  /// Concurrent callers share one in-flight refresh.
+  Future<void> adoptUiLoginTokens({
+    required GraphQLClient gqlClient,
+    required UiLoginTokens tokens,
+    required int forEpoch,
+    required String address,
+    required String username,
+    String? password,
+    AccountBinding? expectedBinding,
+  }) async {
+    final store = ref.read(authCredentialsStoreProvider.notifier);
+    await store.withIdentityChange(() async {
+      final epoch = store.serverEpoch;
+      if (address != ref.read(currentServerAddressProvider)) {
+        throw StateError('Authentication server changed');
+      }
+      final accountClient = GraphQLClient(
+        link: AuthLink(
+          getToken: () => 'Bearer ${tokens.accessToken}',
+        ).concat(gqlClient.link),
+        cache: GraphQLCache(),
+        defaultPolicies: DefaultPolicies(
+          query: Policies(fetch: FetchPolicy.noCache),
+        ),
+        queryRequestTimeout: gqlClient.queryManager.requestTimeout,
+      );
+      final binding = await AccountSessionRepository(
+        accountClient,
+      ).resolve(address: address, loginUsername: username);
+      if (epoch != store.serverEpoch ||
+          address != ref.read(currentServerAddressProvider)) {
+        throw StateError('Authentication session changed');
+      }
+      // userId + catalogId pin the account to a server instance. The address
+      // is only how we reached it, and the endpoint resolver rewrites it on a
+      // Wi-Fi/mobile switch, so comparing it rejects the same account.
+      if (expectedBinding != null &&
+          (binding.userId != expectedBinding.userId ||
+              binding.catalogId != expectedBinding.catalogId)) {
+        throw StateError('Authentication account changed');
+      }
+      await store.saveUiLoginTokens(
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        binding: binding,
+        forEpoch: epoch,
+      );
+      if (password != null) {
+        await store.savePassword(password, forEpoch: epoch);
+      }
+      await ref.read(accountNoticeProvider.notifier).set(null);
+      ref.read(needsReauthProvider.notifier).set(false);
+    }, expectedEpoch: forEpoch);
+  }
+
   Future<RefreshOutcome> refreshUiAccessToken({
     required GraphQLClient gqlClient,
   }) async {
-    final inFlight = _refreshInFlight;
+    final store = ref.read(authCredentialsStoreProvider.notifier);
+    final inFlight = _refreshInFlight[store];
     if (inFlight != null) return inFlight.future;
 
     final completer = Completer<RefreshOutcome>();
-    _refreshInFlight = completer;
+    _refreshInFlight[store] = completer;
     try {
       final outcome = await _refreshUiAccessTokenImpl(gqlClient);
       completer.complete(outcome);
@@ -455,7 +546,9 @@ class AuthCoordinator extends _$AuthCoordinator {
       completer.complete(outcome);
       return outcome;
     } finally {
-      _refreshInFlight = null;
+      if (identical(_refreshInFlight[store], completer)) {
+        _refreshInFlight[store] = null;
+      }
     }
   }
 
@@ -465,7 +558,7 @@ class AuthCoordinator extends _$AuthCoordinator {
     final store = ref.read(authCredentialsStoreProvider.notifier);
     // A switch bumping the epoch mid-refresh discards the write below.
     final startEpoch = store.serverEpoch;
-    if (store.identityChanging) {
+    if (store.identityChanging || !store.sessionAdmitted) {
       return RefreshOutcome.transientFailure(
         StateError('Credentials are changing'),
       );
@@ -486,10 +579,6 @@ class AuthCoordinator extends _$AuthCoordinator {
     }
     final tokens = store.uiLoginTokens();
     if (tokens == null) {
-      // No tokens to refresh = nothing more we can do. This is treated
-      // as auth failure (the user must log in again) rather than
-      // transient — there's no path forward without re-auth.
-      ref.read(needsReauthProvider.notifier).set(true);
       return const RefreshOutcome.authFailure();
     }
 

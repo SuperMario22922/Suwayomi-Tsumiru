@@ -31,7 +31,36 @@ Pluggable authentication for all traffic (queries, mutations, subscriptions, ima
 | `simpleLogin` | `SuwayomiAuthLink`: `Cookie: JSESSIONID=…` | WS handshake header | cookie header |
 | `uiLogin` | `SuwayomiAuthLink`: `Authorization: Bearer <jwt>` | WS `initialPayload` `{Authorization: <bare token>}` | `?token=` query param |
 
-`AuthType` is stored in SharedPreferences (`DBKeys.authType`); username in SharedPreferences (`DBKeys.authUsername`). **Credentials go to `flutter_secure_storage`**: `auth.password`, `auth.simple.cookie`, `auth.ui.accessToken`, `auth.ui.refreshToken`, `auth.basic.credentials`.
+`AuthType` is stored in SharedPreferences (`DBKeys.authType`); username in SharedPreferences (`DBKeys.authUsername`). **Credentials go to `flutter_secure_storage`**: `auth.password`, `auth.simple.cookie`, `auth.ui.accessToken`, `auth.ui.refreshToken`, `auth.ui.accountBinding`, `auth.basic.credentials`.
+
+## Browser Simple Login
+
+The browser owns the session cookie; Tsumiru stores a marker rather than the
+cookie value. A successful login page response is not sufficient: before
+saving the marker, the client requires the protected `downloadStatus` query
+to return its expected data without GraphQL errors. Login and verification
+use the same HTTP transport as ordinary server queries.
+
+Server HTTP requests and the web image cache include browser credentials.
+The image cache enables this only for the configured server origin; unrelated
+image URLs retain the default credential policy. Web pages and covers share
+an in-memory cache. Changing the
+active endpoint disposes that manager and creates a new memory cache with the
+new credential origin; the matching cache name does not share a persistent
+store. The browser's own HTTP cache remains separate. Native cookie handling
+and durable cover storage are unchanged.
+
+Same-origin deployments work with the browser's default cookie rules. A web
+app and server using the same scheme and hostname on different ports are
+also supported. Javalin's default `SameSite=Lax` cookie does not accompany
+cross-site API requests, such as a public Tsumiru website connecting to a LAN
+IP. Supporting that deployment requires server-side cookie and HTTPS changes
+and remains subject to browser third-party-cookie restrictions. Hosting the
+app and API behind the same origin avoids those dependencies.
+
+A failed session probe reports that the session could not be verified. It
+does not assume that the password is wrong or that the browser blocked a
+cookie; an unexpected response or a connection failure can also cause it.
 
 ## Token lifecycle (ui_login)
 
@@ -42,7 +71,7 @@ Pluggable authentication for all traffic (queries, mutations, subscriptions, ima
 
 ## Gotchas (security-sensitive)
 
-- **Single-flight is a file-static `_refreshInFlight`, not an instance field** — survives Riverpod invalidation mid-refresh. Tests must call `debugResetAuthCoordinatorSingleFlight()` in `setUp`.
+- Refresh single-flight is keyed by `AuthCredentialsStore`: coordinator invalidation preserves the same flight, while a replacement application container receives an independent one. Tests call `debugResetAuthCoordinatorSingleFlight()` in `setUp`.
 - **Bare token in WS `connection_init`** (`{Authorization: <token>}`, no "Bearer ") — adding the prefix silently breaks subscriptions. Differs from the HTTP header.
 - **Simple Login leaks server-side sessions on Test Connection** — `POST /login.html` always creates a session; discarding the cookie doesn't destroy it; no logout-without-cookie endpoint.
 - **`decodeJwtExp` does NOT verify the signature** — intentional (expiry is for Timer sizing only; the server enforces access).
@@ -50,3 +79,27 @@ Pluggable authentication for all traffic (queries, mutations, subscriptions, ima
 - **Migrated basic creds live under `auth.basic.credentials`**, tracked by a separate `credentialsProvider`, not `AuthCredentialsState`. Logout must call `clearBasicCredentials()` or they persist invisibly.
 - **Refresh client must stay un-authed** — if it ever gains a `SuwayomiAuthLink`, refresh recurses infinitely.
 - **`isLocalAddress` suppresses the insecure-transport warning** for `localhost`/`127.x`/`10.x`/`172.16–31.x`/`192.168.x` only.
+
+## Account session boundary
+
+`AuthCredentialsStore.withIdentityChange` closes request admission before credentials change and publishes a new session generation when the transition ends. HTTP and subscription clients follow that generation. Retained clients reject new requests and late responses once their session has ended; token refresh alone preserves the clients.
+
+Login and credential checks use `unauthenticatedGraphQlClientProvider`. It includes proxy headers but excludes stored account credentials, because the multi-user server rejects login requests from an already authenticated caller.
+
+Credential replacement and explicit logout enter this boundary at the store, including direct calls. Worker refresh uses a separate operation that requires the original refresh token; worker records also carry the originating authorization epoch and catalogue ID. A stale worker cannot replace the current login.
+
+LAN/remote address failover preserves the session. The HTTP transport checks the captured session before endpoint resolution, after resolution and before every send, including delayed retries.
+
+UI Login verifies the current account and its catalogue identity before saving credentials. The secure account binding includes the token pair, so an interrupted write cannot attach an old catalogue owner to new credentials. Refresh preserves the binding; replacement without a verified owner clears it. Login attempts retain the server address and write epoch captured before verification.
+
+## Accounts and permissions
+
+More → Account shows the signed-in account, password action, permissions and retained device catalogues. UI Login uses the current server's account API. An exact missing-account-field response identifies an older server; loading, failed or cached account results do not grant privileged access. See `features/account/data/account_providers.dart` and `domain/account_access.dart`.
+
+The account screen presents nine operational grants: install extensions, install external extensions, uninstall extensions, download chapters, manage settings, manage users, manage extension stores, manage source preferences and manage cache. The unfinished NSFW grant is not shown. Reading chapters is not a download grant: the server's page-reading endpoint can remain available when `DOWNLOAD_CHAPTERS` is denied. Download entry points therefore check that grant separately. See `presentation/account_permission_labels.dart` and `features/offline/data/offline_download_permission.dart`.
+
+Manage users requires supported accounts and current `MANAGE_USERS` access. It provides paged username search, direct creation, permission replacement, and registration/recovery code creation and revocation. Only ADMIN can change USER/ADMIN roles; other managers omit roles from updates. Built-in user 1 has immutable administration controls. Codes are shown once after issuance, with copy and expiry; revocation requires confirmation. The server has no user-deletion operation. See [Account administration](account-administration.md).
+
+Personal password changes verify the original account before adopting replacement tokens. Built-in user 1 changes the configured `authPassword` through server settings; ordinary accounts use the account password mutation. The built-in path confirms a new login after the settings change and rejects leading or trailing whitespace. Both paths retain the original session/account checks across asynchronous work. See `features/account/data/account_actions.dart`.
+
+Signing out or replacing an account closes request admission and drains foreground and background storage work before switching the active device catalogue. Once the old storage is detached, the transition invalidates all six database stream providers, including their family instances, before awaiting database closure. This releases subscriptions paused by hidden routes. Retained catalogues remain separate from the new account's library and read state. Server chapter files are shared server storage; device copies and their catalogue belong to the verified account. See [Offline reading](offline.md).

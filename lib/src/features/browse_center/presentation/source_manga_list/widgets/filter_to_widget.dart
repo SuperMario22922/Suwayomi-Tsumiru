@@ -29,49 +29,37 @@ class FilterToWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final firstCurrentChange = currentChanges.firstOrNull;
     return switch (filter) {
-      FilterHeader(name: String? name) => name.isNotBlank
-          ? ListTile(
-              title: Text(name),
-              dense: true,
-            )
-          : const SizedBox.shrink(),
+      FilterHeader(name: String? name) =>
+        name.isNotBlank
+            ? ListTile(title: Text(name), dense: true)
+            : const SizedBox.shrink(),
       FilterSeparator() => const Divider(),
-      FilterText(
-        name: String? name,
-        textState: String? state,
-      ) =>
-        Padding(
-          padding: KEdgeInsets.h16v4.size,
-          child: SearchField(
-            autofocus: false,
-            onChanged: (val) => onChanged([
-              FilterChange(textState: val, position: kPositionPlaceholder),
-            ]),
-            labelText: name,
-            initialText: firstCurrentChange?.textState ?? state,
-          ),
+      FilterText(name: String? name, textState: String? state) => Padding(
+        padding: KEdgeInsets.h16v4.size,
+        child: SearchField(
+          autofocus: false,
+          onChanged: (val) => onChanged([
+            FilterChange(textState: val, position: kPositionPlaceholder),
+          ]),
+          labelText: name,
+          initialText: firstCurrentChange?.textState ?? state,
         ),
-      FilterCheckBox(
-        name: String? name,
-        checkBoxState: bool? state,
-      ) =>
+      ),
+      FilterCheckBox(name: String? name, checkBoxState: bool? state) =>
         CheckboxListTile(
           value: firstCurrentChange?.checkBoxState ?? state.ifNull(),
           title: Text(name),
           onChanged: (value) => onChanged([
-            FilterChange(checkBoxState: value, position: kPositionPlaceholder)
+            FilterChange(checkBoxState: value, position: kPositionPlaceholder),
           ]),
           controlAffinity: ListTileControlAffinity.leading,
         ),
-      FilterTriState(
-        name: String? name,
-        tristate: TriState state,
-      ) =>
+      FilterTriState(name: String? name, tristate: TriState state) =>
         _TriStateTile(
           name: name,
           state: firstCurrentChange?.triState ?? state,
           onChanged: (value) => onChanged([
-            FilterChange(triState: value, position: kPositionPlaceholder)
+            FilterChange(triState: value, position: kPositionPlaceholder),
           ]),
         ),
       FilterSort(
@@ -80,17 +68,15 @@ class FilterToWidget extends StatelessWidget {
         displayValues: List<String> values,
       ) =>
         ExpansionTile(
-          title: Text(
-            name,
-            style: context.textTheme.labelLarge,
-          ),
+          title: Text(name, style: context.textTheme.labelLarge),
           children: [
             for (int i = 0; i < (values.length).getValueOnNullOrNegative(); i++)
               SortListTile(
                 key: ValueKey("$name-$i"),
-                ascending: (firstCurrentChange?.sortState?.ascending ??
-                        state.ascending)
-                    .ifNull(true),
+                ascending:
+                    (firstCurrentChange?.sortState?.ascending ??
+                            state.ascending)
+                        .ifNull(true),
                 title: Text(values[i]),
                 selected:
                     i == (firstCurrentChange?.sortState?.index ?? state.index),
@@ -103,7 +89,7 @@ class FilterToWidget extends StatelessWidget {
                     FilterChange(
                       sortState: sortChange,
                       position: kPositionPlaceholder,
-                    )
+                    ),
                   ]);
                 },
                 onSelected: () {
@@ -112,10 +98,10 @@ class FilterToWidget extends StatelessWidget {
                     FilterChange(
                       sortState: sortChange,
                       position: kPositionPlaceholder,
-                    )
+                    ),
                   ]);
                 },
-              )
+              ),
           ],
         ),
       FilterSelect(
@@ -128,11 +114,7 @@ class FilterToWidget extends StatelessWidget {
           children: [
             Expanded(
               child: ListTile(
-                title: Text(
-                  name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                title: Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
               ),
             ),
             Expanded(
@@ -144,25 +126,28 @@ class FilterToWidget extends StatelessWidget {
                     isExpanded: true,
                     value: firstCurrentChange?.selectState ?? state,
                     hint: Text(name),
-                    items: List.generate(
-                      (displayValues.length).getValueOnNullOrNegative(),
-                      (index) => index,
-                    )
-                        .map((e) => DropdownMenuItem(
-                              value: e,
-                              child: Text(
-                                displayValues[e],
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: context.textTheme.bodySmall,
+                    items:
+                        List.generate(
+                              (displayValues.length).getValueOnNullOrNegative(),
+                              (index) => index,
+                            )
+                            .map(
+                              (e) => DropdownMenuItem(
+                                value: e,
+                                child: Text(
+                                  displayValues[e],
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: context.textTheme.bodySmall,
+                                ),
                               ),
-                            ))
-                        .toList(),
+                            )
+                            .toList(),
                     onChanged: (value) => onChanged([
                       FilterChange(
                         selectState: value,
                         position: kPositionPlaceholder,
-                      )
+                      ),
                     ]),
                   ),
                 ),
@@ -170,10 +155,7 @@ class FilterToWidget extends StatelessWidget {
             ),
           ],
         ),
-      FilterGroup(
-        name: String name,
-        groupState: List<PrimitiveFilter> state,
-      ) =>
+      FilterGroup(name: String name, groupState: List<PrimitiveFilter> state) =>
         FilterGroupWidget(
           name: name,
           filters: state,
@@ -200,19 +182,23 @@ class FilterGroupWidget extends HookWidget {
   final ValueChanged<List<FilterChange>> onChanged;
 
   void onChangedWrapper(Map<int, List<FilterChange>> filterChangeMap) {
-    final filterChanges = filterChangeMap.values.fold(
-      <FilterChange>[],
-      (prev, curr) {
-        prev.addAll(curr);
-        return prev;
-      },
-    );
-    onChanged(filterChanges
-        .map((groupFilter) => FilterChange(
+    final filterChanges = filterChangeMap.values.fold(<FilterChange>[], (
+      prev,
+      curr,
+    ) {
+      prev.addAll(curr);
+      return prev;
+    });
+    onChanged(
+      filterChanges
+          .map(
+            (groupFilter) => FilterChange(
               groupChange: groupFilter,
               position: kPositionPlaceholder,
-            ))
-        .toList());
+            ),
+          )
+          .toList(),
+    );
   }
 
   @override

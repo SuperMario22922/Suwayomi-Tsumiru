@@ -16,6 +16,7 @@ import 'package:tsumiru/src/features/auth/data/secure_credentials_provider.dart'
 import 'package:tsumiru/src/features/notifications/controller/notifications_controller.dart';
 import 'package:tsumiru/src/features/notifications/data/background/notification_background_client.dart';
 import 'package:tsumiru/src/features/notifications/data/background/notification_background_entry.dart';
+import 'package:tsumiru/src/features/notifications/data/local_notification_service.dart';
 import 'package:tsumiru/src/features/notifications/data/notification_state_store.dart';
 import 'package:tsumiru/src/features/offline/data/background/background_completion_log.dart';
 import 'package:tsumiru/src/features/offline/data/background/background_download_controller.dart';
@@ -230,6 +231,40 @@ void main() {
   }
 
   test(
+    'notification identity survives sync but rejects a replacement login',
+    () async {
+      await login(jwt(2000000000, 'A'), 'refresh-A');
+      final controller = container.read(notificationsControllerProvider);
+      await controller.sync();
+      final store = NotificationStateStore(prefs);
+      final first = store.readTokenRecord()!;
+      final owner = store.readConfig()!;
+      final payload = NotificationPayload.chapter(
+        mangaId: 1,
+        chapterId: 5,
+        chapterIds: [5],
+        identityEpoch: owner.identityEpoch,
+        catalogServerId: owner.catalogServerId,
+        sessionFingerprint: owner.sessionFingerprint,
+      );
+      expect(controller.acceptsNotification(payload), isTrue);
+      await controller.sync();
+      expect(
+        store.readTokenRecord()!.notificationSessionId,
+        first.notificationSessionId,
+      );
+      await login(jwt(2000000000, 'B'), 'refresh-B');
+      expect(controller.acceptsNotification(payload), isFalse);
+      await controller.sync();
+      expect(
+        store.readTokenRecord()!.notificationSessionId,
+        isNot(first.notificationSessionId),
+      );
+      expect(controller.acceptsNotification(payload), isFalse);
+    },
+  );
+
+  test(
     'sync imports and preserves a worker refresh across repeated publications',
     () async {
       final oldAccess = jwt(2000000000, 'reader');
@@ -241,6 +276,9 @@ void main() {
           gen: 4,
           authType: 'uiLogin',
           endpoint: 'https://server.test|-',
+          identityEpoch: CatchupStateStore(prefs).identityEpoch,
+          catalogServerId: 'catalog',
+          originalRefreshToken: 'old-refresh',
           accessToken: rotatedAccess,
           refreshToken: 'rotated-refresh',
         ),
@@ -360,6 +398,52 @@ void main() {
   );
 
   test(
+    'saved permission denial blocks queue scheduling without changing user pause',
+    () async {
+      await config();
+      await writeCatchupWorkSpec(container.read);
+      final state = CatchupStateStore(prefs);
+      await state.recordDownloadPermission(
+        'catalog',
+        allowed: false,
+        expectedRevision: 0,
+        isCurrent: () => true,
+        baseDir: paths.baseDir,
+      );
+      await reconcileBackgroundSchedule();
+      expect(state.paused, isFalse);
+      expect(schedule.registrations, isEmpty);
+      expect(schedule.cancellations, [kNewChapterPeriodicName]);
+      await state.recordDownloadPermission(
+        'catalog',
+        allowed: true,
+        expectedRevision: 1,
+        isCurrent: () => true,
+        baseDir: paths.baseDir,
+      );
+      await reconcileBackgroundSchedule();
+      expect(schedule.registrations, hasLength(1));
+    },
+  );
+
+  test(
+    'publication carries database attempts into both worker snapshots',
+    () async {
+      await db.setKeepRule(1, OfflineKeepRule.all, 3);
+      await db.bumpChapterGeneration(5);
+      for (var i = 0; i < 4; i++) {
+        await db.incrementServerFetchAttempts(5);
+      }
+      await writeCatchupWorkSpec(container.read);
+      final spec = CatchupStateStore(prefs).readSpec()!;
+      expect(spec.queuedChapters.single.serverFetchAttempts, 4);
+      expect(spec.queuedChapters.single.generation, 1);
+      expect(spec.manga.single.serverFetchAttempts, {5: 4});
+      expect(spec.manga.single.generationOf(5), 1);
+    },
+  );
+
+  test(
     'a pending server-fetch arms a short follow-up wake that stops re-arming when it clears',
     () async {
       await config();
@@ -394,7 +478,7 @@ void main() {
         'catalog',
         const CatchupLedger(
           pendingServerFetch: {99: 1},
-          serverFetchRetries: {99: kMaxChapterAttempts},
+          serverFetchRetries: {99: catchupMaxChapterAttempts},
         ),
       );
       await reconcileBackgroundSchedule();

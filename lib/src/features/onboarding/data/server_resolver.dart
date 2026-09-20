@@ -64,30 +64,30 @@ class ProbeResult {
 
   /// Nothing answered at this candidate (socket error / timeout / no body).
   const ProbeResult.notReached(this.url)
-      : confirmed = false,
-        reached = false,
-        basicGated = false,
-        authMode = null,
-        serverName = null,
-        serverVersion = null;
+    : confirmed = false,
+      reached = false,
+      basicGated = false,
+      authMode = null,
+      serverName = null,
+      serverVersion = null;
 
   /// The host answered but it was not a confirmable Suwayomi GraphQL body.
   const ProbeResult.reachedUnconfirmed(this.url)
-      : confirmed = false,
-        reached = true,
-        basicGated = false,
-        authMode = null,
-        serverName = null,
-        serverVersion = null;
+    : confirmed = false,
+      reached = true,
+      basicGated = false,
+      authMode = null,
+      serverName = null,
+      serverVersion = null;
 
   /// The transport is behind HTTP Basic auth — opaque, cannot confirm.
   const ProbeResult.basicGatedResult(this.url)
-      : confirmed = false,
-        reached = true,
-        basicGated = true,
-        authMode = null,
-        serverName = null,
-        serverVersion = null;
+    : confirmed = false,
+      reached = true,
+      basicGated = true,
+      authMode = null,
+      serverName = null,
+      serverVersion = null;
 
   final String url;
 
@@ -531,7 +531,10 @@ Future<ProbeResult> probeServer(
   }
 
   final classified = classifyProbeBody(
-      url: baseUrl, aboutBody: aboutBody, authBody: authBody ?? '');
+    url: baseUrl,
+    aboutBody: aboutBody,
+    authBody: authBody ?? '',
+  );
   if (classified != null) {
     if (authBody == null && classified.confirmed) {
       // B unreadable: we can't prove the server is open, and reading it as
@@ -612,13 +615,14 @@ Future<ResolvedServer> resolveServer(
     );
   }
 
-  final doProbe = probe ??
+  final doProbe =
+      probe ??
       (url) => probeServer(
-            url,
-            client: client,
-            timeout: perCandidateTimeout,
-            extraHeaders: extraHeaders,
-          );
+        url,
+        client: client,
+        timeout: perCandidateTimeout,
+        extraHeaders: extraHeaders,
+      );
 
   ProbeResult? bestBasicGated;
   ProbeResult? bestReached;
@@ -677,8 +681,9 @@ String displayAddress(String baseUrl) {
 /// Whether a failed resolve should suggest "try its https address" — true only
 /// when NO https candidate was tried (the user pinned an explicit `http://`).
 /// A bare host already includes an https candidate, so we don't nag.
-bool shouldSuggestHttps(String rawInput) => !connectionCandidates(rawInput)
-    .any((c) => c.toLowerCase().startsWith('https://'));
+bool shouldSuggestHttps(String rawInput) => !connectionCandidates(
+  rawInput,
+).any((c) => c.toLowerCase().startsWith('https://'));
 
 /// Best-effort scheme-bearing form of [rawInput] for the "use this address
 /// anyway" escape — guarantees a scheme so we never persist raw schemeless
@@ -747,7 +752,7 @@ enum VerifiedAuthMode { simpleLogin, uiLogin }
 /// cookie is then ignored. So a successful simple-login is NOT proof the server
 /// is in simple_login mode. We must push the obtained credential through a real
 /// protected query and let the server's own `getUserFromContext` be the judge:
-/// authorised (data, no "unauthorized") → the credential is the right kind.
+/// authorised (expected data without errors) → the credential is the right kind.
 ///
 /// Pass EXACTLY one of [cookie] / [bearer] / [basic]. [basic] is the raw
 /// `username:password` pair (base64-encoded here into a `Basic` header) — used
@@ -784,9 +789,15 @@ Future<bool> authProbeAuthorized(
     }
     final streamed = await client.send(request).timeout(timeout);
     final body = await streamed.stream.bytesToString().timeout(timeout);
-    if (streamed.statusCode == 401 || streamed.statusCode == 403) return false;
-    // Authorised iff the body does not carry an "unauthorized" GraphQL error.
-    return !_bodyIndicatesUnauthorised(body);
+    if (streamed.statusCode != 200) return false;
+    final decoded = _tryDecode(body);
+    if (decoded == null) return false;
+    final errors = decoded['errors'];
+    if (errors != null && (errors is! List || errors.isNotEmpty)) return false;
+    final data = decoded['data'];
+    if (data is! Map) return false;
+    final status = data['downloadStatus'];
+    return status is Map && status['__typename'] == 'DownloadStatus';
   } catch (_) {
     return false;
   }
@@ -858,8 +869,12 @@ Future<VerifiedAuthMode?> verifyAuthMode({
   }
   if (cookie != null &&
       cookie.isNotEmpty &&
-      await authProbeAuthorized(baseUrl,
-          client: client, cookie: cookie, timeout: timeout)) {
+      await authProbeAuthorized(
+        baseUrl,
+        client: client,
+        cookie: cookie,
+        timeout: timeout,
+      )) {
     return VerifiedAuthMode.simpleLogin;
   }
 
@@ -873,8 +888,12 @@ Future<VerifiedAuthMode?> verifyAuthMode({
   }
   if (bearer != null &&
       bearer.isNotEmpty &&
-      await authProbeAuthorized(baseUrl,
-          client: client, bearer: bearer, timeout: timeout)) {
+      await authProbeAuthorized(
+        baseUrl,
+        client: client,
+        bearer: bearer,
+        timeout: timeout,
+      )) {
     return VerifiedAuthMode.uiLogin;
   }
 

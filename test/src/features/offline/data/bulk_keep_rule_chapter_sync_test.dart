@@ -34,10 +34,8 @@ import '../../../../helpers/offline_test_db.dart';
 // Fakes
 // ---------------------------------------------------------------------------
 
-GraphQLClient _dummyClient() => GraphQLClient(
-      link: HttpLink('http://localhost:0'),
-      cache: GraphQLCache(),
-    );
+GraphQLClient _dummyClient() =>
+    GraphQLClient(link: HttpLink('http://localhost:0'), cache: GraphQLCache());
 
 /// Always returns null (simulates network failure / server has no chapters).
 class _NullChapterRepo extends MangaBookRepository {
@@ -97,7 +95,8 @@ void main() {
         expect(
           chapters,
           isEmpty,
-          reason: 'chapters have never been synced; the reconciler would '
+          reason:
+              'chapters have never been synced; the reconciler would '
               'see an empty list and queue nothing',
         );
       },
@@ -116,13 +115,14 @@ void main() {
         // No upsertMangaMetadata — the row is deliberately absent.
         await db.setKeepRule(42, OfflineKeepRule.all, 3);
 
-        final row = await (db.select(db.offlineMangas)
-              ..where((t) => t.id.equals(42)))
-            .getSingleOrNull();
+        final row = await (db.select(
+          db.offlineMangas,
+        )..where((t) => t.id.equals(42))).getSingleOrNull();
         expect(
           row,
           isNull,
-          reason: 'setKeepRule is an UPDATE, not an upsert — it cannot create '
+          reason:
+              'setKeepRule is an UPDATE, not an upsert — it cannot create '
               'the row, so the keep rule is lost with no error raised',
         );
 
@@ -133,9 +133,9 @@ void main() {
           updatedAt: DateTime(2026),
         );
         await db.setKeepRule(42, OfflineKeepRule.all, 3);
-        final after = await (db.select(db.offlineMangas)
-              ..where((t) => t.id.equals(42)))
-            .getSingle();
+        final after = await (db.select(
+          db.offlineMangas,
+        )..where((t) => t.id.equals(42))).getSingle();
         expect(after.keepRule, OfflineKeepRule.all);
         expect(after.keepUnreadCount, 3);
       },
@@ -153,15 +153,18 @@ void main() {
       final repo = _NullChapterRepo();
       final starterCalls = <bool>[];
 
-      final container = ProviderContainer(overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        offlineActiveProvider.overrideWithValue(true),
-        offlineDatabaseProvider.overrideWithValue(db),
-        mangaBookRepositoryProvider.overrideWithValue(repo),
-        downloadStarterProvider.overrideWithValue(
-          ({bool userInitiated = false}) async => starterCalls.add(userInitiated),
-        ),
-      ]);
+      final container = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          offlineActiveProvider.overrideWithValue(true),
+          offlineDatabaseProvider.overrideWithValue(db),
+          mangaBookRepositoryProvider.overrideWithValue(repo),
+          downloadStarterProvider.overrideWithValue(
+            ({bool userInitiated = false}) async =>
+                starterCalls.add(userInitiated),
+          ),
+        ],
+      );
       addTearDown(container.dispose);
 
       await syncAndReconcileMangaSet(container, {});
@@ -178,17 +181,16 @@ void main() {
       );
     });
 
-    test(
-      'offline inactive → no-op even when manga IDs are provided',
-      () async {
-        SharedPreferences.setMockInitialValues({});
-        final prefs = await SharedPreferences.getInstance();
-        final db = testOfflineDatabase();
-        addTearDown(db.close);
-        final repo = _NullChapterRepo();
-        final starterCalls = <bool>[];
+    test('offline inactive → no-op even when manga IDs are provided', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final db = testOfflineDatabase();
+      addTearDown(db.close);
+      final repo = _NullChapterRepo();
+      final starterCalls = <bool>[];
 
-        final container = ProviderContainer(overrides: [
+      final container = ProviderContainer(
+        overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
           offlineActiveProvider.overrideWithValue(false),
           offlineDatabaseProvider.overrideWithValue(db),
@@ -197,20 +199,21 @@ void main() {
             ({bool userInitiated = false}) async =>
                 starterCalls.add(userInitiated),
           ),
-        ]);
-        addTearDown(container.dispose);
+        ],
+      );
+      addTearDown(container.dispose);
 
-        await syncAndReconcileMangaSet(container, {1, 2});
+      await syncAndReconcileMangaSet(container, {1, 2});
 
-        expect(
-          repo.calledFor,
-          isEmpty,
-          reason: 'offline inactive means no catalog is available; no '
-              'sync or download should start',
-        );
-        expect(starterCalls, isEmpty);
-      },
-    );
+      expect(
+        repo.calledFor,
+        isEmpty,
+        reason:
+            'offline inactive means no catalog is available; no '
+            'sync or download should start',
+      );
+      expect(starterCalls, isEmpty);
+    });
   });
 
   // --- syncAndReconcileMangaSet integration ------------------------------------
@@ -229,16 +232,18 @@ void main() {
         final repo = _NullChapterRepo();
         final starterCalls = <bool>[];
 
-        final container = ProviderContainer(overrides: [
-          sharedPreferencesProvider.overrideWithValue(prefs),
-          offlineActiveProvider.overrideWithValue(true),
-          offlineDatabaseProvider.overrideWithValue(db),
-          mangaBookRepositoryProvider.overrideWithValue(repo),
-          downloadStarterProvider.overrideWithValue(
-            ({bool userInitiated = false}) async =>
-                starterCalls.add(userInitiated),
-          ),
-        ]);
+        final container = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(prefs),
+            offlineActiveProvider.overrideWithValue(true),
+            offlineDatabaseProvider.overrideWithValue(db),
+            mangaBookRepositoryProvider.overrideWithValue(repo),
+            downloadStarterProvider.overrideWithValue(
+              ({bool userInitiated = false}) async =>
+                  starterCalls.add(userInitiated),
+            ),
+          ],
+        );
         addTearDown(container.dispose);
 
         await syncAndReconcileMangaSet(container, {1, 2});
@@ -246,13 +251,15 @@ void main() {
         expect(
           repo.calledFor.toSet(),
           {1, 2},
-          reason: 'the chapter list must be fetched from the server for '
+          reason:
+              'the chapter list must be fetched from the server for '
               'every manga in the set, not just the first',
         );
         expect(
           starterCalls.length,
           1,
-          reason: 'the download starter is kicked exactly once at the end '
+          reason:
+              'the download starter is kicked exactly once at the end '
               'of the full sync so freshly-queued chapters begin transferring',
         );
       },
@@ -271,16 +278,18 @@ void main() {
         final repo = _NullChapterRepo();
         final starterCalls = <bool>[];
 
-        final container = ProviderContainer(overrides: [
-          sharedPreferencesProvider.overrideWithValue(prefs),
-          offlineActiveProvider.overrideWithValue(true),
-          offlineDatabaseProvider.overrideWithValue(db),
-          mangaBookRepositoryProvider.overrideWithValue(repo),
-          downloadStarterProvider.overrideWithValue(
-            ({bool userInitiated = false}) async =>
-                starterCalls.add(userInitiated),
-          ),
-        ]);
+        final container = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(prefs),
+            offlineActiveProvider.overrideWithValue(true),
+            offlineDatabaseProvider.overrideWithValue(db),
+            mangaBookRepositoryProvider.overrideWithValue(repo),
+            downloadStarterProvider.overrideWithValue(
+              ({bool userInitiated = false}) async =>
+                  starterCalls.add(userInitiated),
+            ),
+          ],
+        );
         addTearDown(container.dispose);
 
         await syncAndReconcileMangaSet(container, {1, 2, 3});
@@ -293,25 +302,25 @@ void main() {
         expect(
           starterCalls,
           [false],
-          reason: 'the starter fires once regardless of individual sync '
+          reason:
+              'the starter fires once regardless of individual sync '
               'failures — the same pattern as runKeepRuleCatchUp',
         );
       },
     );
 
-    test(
-      'userInitiated is passed through to the download starter',
-      () async {
-        // The bulk keep-rule change is an explicit user gesture, so the FGS
-        // must start in user-initiated mode (drives the "X/Y" notification).
-        SharedPreferences.setMockInitialValues({});
-        final prefs = await SharedPreferences.getInstance();
-        final db = testOfflineDatabase();
-        addTearDown(db.close);
-        final repo = _NullChapterRepo();
-        final starterCalls = <bool>[];
+    test('userInitiated is passed through to the download starter', () async {
+      // The bulk keep-rule change is an explicit user gesture, so the FGS
+      // must start in user-initiated mode (drives the "X/Y" notification).
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final db = testOfflineDatabase();
+      addTearDown(db.close);
+      final repo = _NullChapterRepo();
+      final starterCalls = <bool>[];
 
-        final container = ProviderContainer(overrides: [
+      final container = ProviderContainer(
+        overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
           offlineActiveProvider.overrideWithValue(true),
           offlineDatabaseProvider.overrideWithValue(db),
@@ -320,18 +329,19 @@ void main() {
             ({bool userInitiated = false}) async =>
                 starterCalls.add(userInitiated),
           ),
-        ]);
-        addTearDown(container.dispose);
+        ],
+      );
+      addTearDown(container.dispose);
 
-        await syncAndReconcileMangaSet(container, {1}, userInitiated: true);
+      await syncAndReconcileMangaSet(container, {1}, userInitiated: true);
 
-        expect(
-          starterCalls,
-          [true],
-          reason: 'a user-initiated bulk keep must start the FGS in '
-              'user-initiated mode, not the background default',
-        );
-      },
-    );
+      expect(
+        starterCalls,
+        [true],
+        reason:
+            'a user-initiated bulk keep must start the FGS in '
+            'user-initiated mode, not the background default',
+      );
+    });
   });
 }

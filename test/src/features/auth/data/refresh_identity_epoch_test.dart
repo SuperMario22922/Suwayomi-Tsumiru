@@ -135,6 +135,83 @@ void main() {
     debugResetAuthCoordinatorSingleFlight();
   });
 
+  test('new container refresh never joins retired account refresh', () async {
+    final oldRefresh = container
+        .read(authCoordinatorProvider.notifier)
+        .refreshUiAccessToken(gqlClient: client);
+    await link.requested.future;
+    await store.retire();
+    container.dispose();
+    final prefs = await SharedPreferences.getInstance();
+    container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        secureStorageProvider.overrideWithValue(storage),
+      ],
+    );
+    await container.read(authCredentialsStoreProvider.future);
+    store = container.read(authCredentialsStoreProvider.notifier);
+    await store.saveUiLoginTokens(
+      accessToken: 'account-b-access',
+      refreshToken: 'account-b-refresh',
+    );
+    var callsB = 0;
+    final clientB = GraphQLClient(
+      link: Link.function((request, [forward]) {
+        callsB++;
+        return Stream.value(_success('account-b-refreshed'));
+      }),
+      cache: GraphQLCache(),
+    );
+    final newRefresh = container
+        .read(authCoordinatorProvider.notifier)
+        .refreshUiAccessToken(gqlClient: clientB);
+    await pumpEventQueue();
+    link.response.complete(_success('account-a-refreshed'));
+    final resultB = await newRefresh;
+    expect(await oldRefresh, isA<RefreshTransientFailure>());
+    expect(callsB, 1);
+    expect(resultB, isA<RefreshSuccess>());
+    expect(
+      await storage.read(key: 'auth.ui.accessToken'),
+      'account-b-refreshed',
+    );
+    expect(
+      await storage.read(key: 'auth.ui.refreshToken'),
+      'account-b-refresh',
+    );
+  });
+
+  test(
+    'coordinator invalidation preserves same-store refresh single-flight',
+    () async {
+      final first = container
+          .read(authCoordinatorProvider.notifier)
+          .refreshUiAccessToken(gqlClient: client);
+      await link.requested.future;
+      container.invalidate(authCoordinatorProvider);
+      var duplicateCalls = 0;
+      final duplicateClient = GraphQLClient(
+        link: Link.function((request, [forward]) {
+          duplicateCalls++;
+          return Stream.value(_success('duplicate-token'));
+        }),
+        cache: GraphQLCache(),
+      );
+      final second = container
+          .read(authCoordinatorProvider.notifier)
+          .refreshUiAccessToken(gqlClient: duplicateClient);
+      link.response.complete(_success('account-a-refreshed'));
+      expect(await first, isA<RefreshSuccess>());
+      expect(await second, isA<RefreshSuccess>());
+      expect(duplicateCalls, 0);
+      expect(
+        await storage.read(key: 'auth.ui.accessToken'),
+        'account-a-refreshed',
+      );
+    },
+  );
+
   Future<void> expectAccountB() async {
     final credentials = await container.read(
       authCredentialsStoreProvider.future,
@@ -151,6 +228,45 @@ void main() {
     accessToken: 'account-b-access',
     refreshToken: 'account-b-refresh',
     forEpoch: store.serverEpoch,
+  );
+
+  test(
+    'login submitted during another identity change never sends credentials',
+    () async {
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final transition = store.withIdentityChange(() async {
+        entered.complete();
+        await release.future;
+        await saveAccountB();
+      });
+      await entered.future;
+      link.response.complete(
+        Response(
+          data: {
+            '__typename': 'Mutation',
+            'login': {
+              '__typename': 'LoginPayload',
+              'accessToken': 'A',
+              'refreshToken': 'R-A',
+            },
+          },
+          response: const {},
+        ),
+      );
+      final attempted = container
+          .read(authCoordinatorProvider.notifier)
+          .loginUi(
+            gqlClient: client,
+            username: 'old-reader',
+            password: 'old-password',
+          );
+      final rejected = expectLater(attempted, throwsStateError);
+      release.complete();
+      await Future.wait([transition, rejected]);
+      expect(link.requested.isCompleted, isFalse);
+      await expectAccountB();
+    },
   );
 
   test(

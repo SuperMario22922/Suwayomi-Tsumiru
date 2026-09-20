@@ -170,7 +170,8 @@ class ReaderBottomControls extends ConsumerWidget {
               shape: const RoundedRectangleBorder(),
               margin: EdgeInsets.zero,
               child: Padding(
-                padding: KEdgeInsets.h16.size +
+                padding:
+                    KEdgeInsets.h16.size +
                     EdgeInsets.only(bottom: systemBottomInset),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -222,23 +223,20 @@ class ReaderBottomControls extends ConsumerWidget {
 }
 
 IconData _readerModeIcon(ReaderMode mode) => switch (mode) {
-      ReaderMode.webtoon ||
-      ReaderMode.continuousVertical =>
-        Icons.public_rounded,
-      ReaderMode.singleHorizontalLTR ||
-      ReaderMode.singleHorizontalRTL ||
-      ReaderMode.singleVertical ||
-      ReaderMode.continuousHorizontalLTR ||
-      ReaderMode.continuousHorizontalRTL =>
-        Icons.menu_book_rounded,
-      ReaderMode.defaultReader => Icons.auto_stories_rounded,
-    };
+  ReaderMode.webtoon || ReaderMode.continuousVertical => Icons.public_rounded,
+  ReaderMode.singleHorizontalLTR ||
+  ReaderMode.singleHorizontalRTL ||
+  ReaderMode.singleVertical ||
+  ReaderMode.continuousHorizontalLTR ||
+  ReaderMode.continuousHorizontalRTL => Icons.menu_book_rounded,
+  ReaderMode.defaultReader => Icons.auto_stories_rounded,
+};
 
 IconData _pageLayoutIcon(PageLayout pageLayout) => switch (pageLayout) {
-      PageLayout.singlePage => Icons.menu_book_rounded,
-      PageLayout.doublePages => Icons.chrome_reader_mode_rounded,
-      PageLayout.automatic => Icons.auto_stories_rounded,
-    };
+  PageLayout.singlePage => Icons.menu_book_rounded,
+  PageLayout.doublePages => Icons.chrome_reader_mode_rounded,
+  PageLayout.automatic => Icons.auto_stories_rounded,
+};
 
 Future<void> _showChapterPicker({
   required BuildContext context,
@@ -357,21 +355,24 @@ class _ReaderChapterSheet extends StatelessWidget {
             itemBuilder: (context, index) {
               final chapter = chapters[index];
               final isCurrent = chapter.id == currentChapterId;
-              final lastPageRead =
-                  chapter.lastPageRead.getValueOnNullOrNegative();
+              final lastPageRead = chapter.lastPageRead
+                  .getValueOnNullOrNegative();
               final scanlator = chapter.scanlator.isNotBlank
                   ? chapter.scanlator!
                   : context.l10n.unknownScanlator;
               return ListTile(
                 dense: true,
-                visualDensity:
-                    const VisualDensity(horizontal: -1, vertical: -3),
+                visualDensity: const VisualDensity(
+                  horizontal: -1,
+                  vertical: -3,
+                ),
                 minLeadingWidth: 24,
                 minVerticalPadding: 0,
                 contentPadding: const EdgeInsets.only(left: 16, right: 8),
                 selected: isCurrent,
-                selectedTileColor:
-                    colorScheme.primaryContainer.withValues(alpha: 0.55),
+                selectedTileColor: colorScheme.primaryContainer.withValues(
+                  alpha: 0.55,
+                ),
                 selectedColor: colorScheme.onPrimaryContainer,
                 leading: Icon(
                   chapter.isRead.ifNull()
@@ -387,8 +388,7 @@ class _ReaderChapterSheet extends StatelessWidget {
                 subtitle: Text(
                   [
                     scanlator,
-                    if (lastPageRead > 0)
-                      context.l10n.page(lastPageRead + 1),
+                    if (lastPageRead > 0) context.l10n.page(lastPageRead + 1),
                   ].join(' • '),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

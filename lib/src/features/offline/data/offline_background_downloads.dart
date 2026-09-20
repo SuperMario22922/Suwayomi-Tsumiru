@@ -13,14 +13,18 @@ import '../../../constants/enum.dart';
 import '../../../global_providers/global_providers.dart';
 import '../../../utils/extensions/custom_extensions.dart';
 import '../../../utils/platform/is_android_native.dart';
+import '../../account/data/account_permission.dart';
 import '../../auth/data/auth_coordinator.dart';
+import '../../auth/data/auth_credentials_store.dart';
 import '../../auth/data/custom_headers_store.dart';
 import '../../manga_book/data/manga_book/manga_book_repository.dart';
+import '../../settings/presentation/general/timeout_settings/timeout_settings_section.dart';
 import '../../settings/presentation/server/widget/client/server_port_tile/server_port_tile.dart';
 import '../../settings/presentation/server/widget/client/server_url_tile/server_url_tile.dart';
 import 'chapter_commit.dart';
 import 'chapter_download_engine.dart';
 import 'offline_download_coordinator.dart';
+import 'offline_download_permission.dart';
 import 'offline_download_progress.dart';
 import 'offline_download_providers.dart';
 import 'offline_repository.dart';
@@ -39,7 +43,8 @@ part 'offline_background_downloads.g.dart';
 /// gap, so the engine's run-time auth reads would throw mid-download.
 @Riverpod(keepAlive: true)
 ChapterDownloadEngine? chapterDownloadEngine(Ref ref) {
-  if (!ref.watch(offlineActiveProvider)) return null;
+  if (!ref.watch(offlineServerAccessProvider)) return null;
+  final isCurrentSession = watchAuthSession(ref);
   // Page-level parallelism. One chapter downloads
   // at a time; this is how many of its pages are in flight at once.
   final parallel =
@@ -47,10 +52,12 @@ ChapterDownloadEngine? chapterDownloadEngine(Ref ref) {
               DBKeys.offlineDownloadConcurrency.initial as int)
           .clamp(1, 10);
   return ChapterDownloadEngine(
-    fetchPage: (pageUrl) => fetchOfflinePageBytes(ref, pageUrl),
+    fetchPage: (pageUrl) =>
+        fetchOfflinePageBytes(ref, pageUrl, isCurrentSession: isCurrentSession),
     writePage: ref.watch(offlinePageStoreProvider),
     parallelPageLimit: parallel,
     refreshAuth: () async {
+      if (!isCurrentSession()) return false;
       // Only ui_login has a refreshable rotating token. basic / simple_login /
       // none don't rotate, so a 401 there means the credential is wrong — no
       // point retrying.
@@ -72,11 +79,17 @@ ChapterDownloadEngine? chapterDownloadEngine(Ref ref) {
           ),
         ),
         cache: GraphQLCache(),
+        queryRequestTimeout: Duration(
+          milliseconds:
+              (ref.read(serverRequestTimeoutProvider) ??
+                  DBKeys.serverRequestTimeout.initial as int) +
+              2000,
+        ),
       );
       final outcome = await ref
           .read(authCoordinatorProvider.notifier)
           .refreshUiAccessToken(gqlClient: rawClient);
-      return outcome is RefreshSuccess;
+      return isCurrentSession() && outcome is RefreshSuccess;
     },
   );
 }
@@ -90,30 +103,53 @@ ChapterDownloadEngine? chapterDownloadEngine(Ref ref) {
 /// active/cancelled state is only meaningful on the instance actually pumping.
 @Riverpod(keepAlive: true)
 OfflineDownloadCoordinator? offlineDownloadCoordinator(Ref ref) {
-  if (!ref.watch(offlineActiveProvider)) return null;
+  if (!ref.watch(offlineServerAccessProvider)) return null;
   final engine = ref.watch(chapterDownloadEngineProvider);
   if (engine == null) return null;
+  final isCurrentSession = watchAuthSession(ref);
   final repo = ref.watch(mangaBookRepositoryProvider);
   final store = ref.watch(offlinePageStoreProvider);
   // Captured at build, read live per call: a rebuild mid-pump unmounts the old
   // Ref, and the old instance still polls this between chapters.
   final prefs = ref.watch(sharedPreferencesProvider);
+  final read = ref.container.read;
   return OfflineDownloadCoordinator(
+    isCurrentSession: isCurrentSession,
     db: ref.watch(offlineDatabaseProvider),
     engine: engine,
     store: store,
-    resolvePages: (chapterId) async =>
-        (await repo.getChapterPages(chapterId: chapterId))?.pages ??
-        const <String>[],
-    onProgress: (chapterId, done, total) => ref
-        .read(offlineDownloadProgressProvider.notifier)
-        .start(chapterId, total: total, done: done),
-    onProgressDone: (chapterId) =>
-        ref.read(offlineDownloadProgressProvider.notifier).clear(chapterId),
+    resolvePages: (chapterId) async {
+      if (!isCurrentSession()) {
+        throw StateError('Authentication session changed');
+      }
+      await verifyDownloadPermission(read);
+      if (!isCurrentSession()) {
+        throw StateError('Authentication session changed');
+      }
+      final result = await repo.getChapterPages(chapterId: chapterId);
+      if (result == null) throw const AccountPermissionUnavailable();
+      return result.pages;
+    },
+    onPermissionDenied: () async {
+      if (isCurrentSession()) await pauseDownloadsForPermission(read);
+    },
+    onProgress: (chapterId, done, total) {
+      if (!isCurrentSession()) return;
+      ref
+          .read(offlineDownloadProgressProvider.notifier)
+          .start(chapterId, total: total, done: done);
+    },
+    onProgressDone: (chapterId) {
+      if (!isCurrentSession()) return;
+      ref.read(offlineDownloadProgressProvider.notifier).clear(chapterId);
+    },
     persistedPaused: () =>
-        prefs.getBool(DBKeys.offlineDownloadsPaused.name) ?? false,
+        !isCurrentSession() ||
+        !downloadPermissionAllowed(read) ||
+        (prefs.getBool(DBKeys.offlineDownloadsPaused.name) ?? false),
     // Deferred: the pump can hit this mid-provider-build.
     onServerUnreachable: () => Future(() {
+      if (!isCurrentSession()) return;
       try {
         ref.read(serverUnreachableProvider.notifier).set(true);
       } catch (_) {}

@@ -14,11 +14,17 @@ Set<int> desiredChapterIds(
   OfflineKeepRule rule,
   int keepUnreadCount,
 ) {
-  final pinned = {for (final c in chapters) if (c.pinned) c.id};
+  final pinned = {
+    for (final c in chapters)
+      if (c.pinned) c.id,
+  };
   final ruleSet = switch (rule) {
     OfflineKeepRule.off => <int>{},
     OfflineKeepRule.all => {for (final c in chapters) c.id},
-    OfflineKeepRule.allUnread => {for (final c in chapters) if (!c.isRead) c.id},
+    OfflineKeepRule.allUnread => {
+      for (final c in chapters)
+        if (!c.isRead) c.id,
+    },
     // Excludes chapters already given up on (OfflineDeviceState.error) from the
     // candidate pool BEFORE cutting to `keepUnreadCount`. Without this, a
     // chapter the source can never serve (e.g. removed/renumbered upstream)
@@ -57,12 +63,14 @@ Set<int> desiredChapterIds(
           .where((c) => c.isRead && ranked(c))
           .fold(-1.0, (m, c) => readOrder(c) > m ? readOrder(c) : m);
       return (chapters
-                .where((c) =>
+              .where(
+                (c) =>
                     !c.isRead &&
                     ranked(c) &&
                     c.deviceState != OfflineDeviceState.error &&
-                    readOrder(c) > floor)
-                .toList()
+                    readOrder(c) > floor,
+              )
+              .toList()
             ..sort((a, b) => readOrder(a).compareTo(readOrder(b))))
           .take(keepUnreadCount)
           .map((c) => c.id)
@@ -150,7 +158,9 @@ Set<int> readChaptersInDeleteWindow(List<OfflineChapter> chapters, int slots) {
   if (nets.timeEvictEnabled) {
     for (final c in downloaded) {
       final dt = c.downloadedAt;
-      if (!c.pinned && dt != null && now.difference(dt).inDays > nets.keepDays) {
+      if (!c.pinned &&
+          dt != null &&
+          now.difference(dt).inDays > nets.keepDays) {
         evict.add(c.id);
       }
     }
@@ -162,11 +172,13 @@ Set<int> readChaptersInDeleteWindow(List<OfflineChapter> chapters, int slots) {
   // (the sort) instead of O(n^2) for a manga with many downloaded chapters.
   var overCapWarning = false;
   if (nets.storageCapEnabled) {
-    final candidates = downloaded
-        .where((c) => !c.pinned && !evict.contains(c.id))
-        .toList()
-      ..sort((a, b) => (a.downloadedAt ?? DateTime(0))
-          .compareTo(b.downloadedAt ?? DateTime(0)));
+    final candidates =
+        downloaded.where((c) => !c.pinned && !evict.contains(c.id)).toList()
+          ..sort(
+            (a, b) => (a.downloadedAt ?? DateTime(0)).compareTo(
+              b.downloadedAt ?? DateTime(0),
+            ),
+          );
     var retainedBytes = downloaded
         .where((c) => !evict.contains(c.id))
         .fold(0, (s, c) => s + c.bytes);

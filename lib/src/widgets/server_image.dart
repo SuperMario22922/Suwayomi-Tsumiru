@@ -8,7 +8,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cached_network_image_platform_interface/cached_network_image_platform_interface.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:gap/gap.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -30,6 +29,25 @@ import '../utils/hooks/debounced_hook.dart';
 import '../utils/misc/app_utils.dart';
 import 'cover_cache/cover_cache.dart';
 import 'custom_circular_progress_indicator.dart';
+
+Future<bool> reloadServerImage({
+  required Iterable<String> cacheKeys,
+  required bool Function() isCurrentSession,
+  required Future<void> Function(String) evict,
+  required Future<void> Function() refresh,
+}) async {
+  for (final key in cacheKeys) {
+    if (!isCurrentSession()) return false;
+    try {
+      await evict(key);
+    } catch (_) {}
+  }
+  if (!isCurrentSession()) return false;
+  try {
+    await refresh();
+  } catch (_) {}
+  return isCurrentSession();
+}
 
 final _trailingSlashes = RegExp(r'/+$');
 final _leadingSlashes = RegExp(r'^/+');
@@ -114,7 +132,7 @@ class ServerImage extends HookConsumerWidget {
   final BoxFit? fit;
   final bool appendApiToUrl;
   final Widget Function(BuildContext, String, DownloadProgress)?
-      progressIndicatorBuilder;
+  progressIndicatorBuilder;
   // Wraps the decoded image. Only invoked once the image has loaded (never for
   // the placeholder), so callers can measure the real rendered page here.
   final Widget Function(BuildContext, ImageProvider)? imageBuilder;
@@ -140,8 +158,8 @@ class ServerImage extends HookConsumerWidget {
   /// takes memCache* directly on [CachedNetworkImage].
   ImageProvider _capDecode(ImageProvider base, int? width, int? height) =>
       (width == null && height == null)
-          ? base
-          : ResizeImage(base, width: width, height: height);
+      ? base
+      : ResizeImage(base, width: width, height: height);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -152,10 +170,14 @@ class ServerImage extends HookConsumerWidget {
     // until the drag stops. Holding the last decode size lets the current bitmap
     // stretch smoothly, then re-decodes once when the size settles. Static
     // memCache* (thumbnails/covers) never changes, so this is a no-op there.
-    final int? cacheWidth =
-        useSettled(memCacheWidth, const Duration(milliseconds: 250));
-    final int? cacheHeight =
-        useSettled(memCacheHeight, const Duration(milliseconds: 250));
+    final int? cacheWidth = useSettled(
+      memCacheWidth,
+      const Duration(milliseconds: 250),
+    );
+    final int? cacheHeight = useSettled(
+      memCacheHeight,
+      const Duration(milliseconds: 250),
+    );
 
     // Renders a crop provider through the same imageBuilder/wrapper contract as
     // the normal paths (imageBuilder fires immediately with the provider, like
@@ -195,20 +217,28 @@ class ServerImage extends HookConsumerWidget {
     // server provider reads, so local pages never subscribe to token rotation
     // (no rebuild storms) and need no network. Both inputs are immutable per
     // widget instance, so this branch is consistent across rebuilds.
-    final localPath = localFilePath ??
-        (imageUrl.startsWith('file:') ? Uri.parse(imageUrl).toFilePath() : null);
+    final localPath =
+        localFilePath ??
+        (imageUrl.startsWith('file:')
+            ? Uri.parse(imageUrl).toFilePath()
+            : null);
     if (localPath != null) {
       if (wantCrop) {
-        return renderCrop(CroppedImageProvider(
-          fetchUrl: imageUrl,
-          cacheKey: localPath,
-          localPath: localPath,
-          targetWidth: cacheWidth,
-          targetHeight: cacheHeight,
-        ));
+        return renderCrop(
+          CroppedImageProvider(
+            fetchUrl: imageUrl,
+            cacheKey: localPath,
+            localPath: localPath,
+            targetWidth: cacheWidth,
+            targetHeight: cacheHeight,
+          ),
+        );
       }
-      final ImageProvider provider =
-          _capDecode(offlineImageProvider(localPath), cacheWidth, cacheHeight);
+      final ImageProvider provider = _capDecode(
+        offlineImageProvider(localPath),
+        cacheWidth,
+        cacheHeight,
+      );
       if (imageBuilder != null) {
         return AppUtils.wrapOn(wrapper, imageBuilder!(context, provider));
       }
@@ -241,24 +271,23 @@ class ServerImage extends HookConsumerWidget {
     final authType = ref.watch(authTypeKeyProvider);
     final basicToken = ref.watch(credentialsProvider).value;
 
-    // Watch ONLY the simple-login cookie via `select` — never the
-    // uiAccessToken. Watching the whole credentials state caused a
-    // rebuild storm in webtoon mode every time the proactive refresh
-    // rotated the access token (every ~4 min), and the wave of
-    // simultaneous ServerImage rebuilds re-anchored the
-    // ScrollablePositionedList and yanked the user backward several
-    // pages mid-chapter. The access token is read via `ref.read` at
-    // build time only — for cached images the URL value is irrelevant
-    // because the lookup hits via the stable cacheKey (baseApi).
+    // Token refresh must not rebuild cached reader images.
     final simpleCookieHeader = ref.watch(
       authCredentialsStoreProvider.select(
         (async) => async.value?.simpleLoginCookieHeader,
       ),
     );
-    final uiAccessTokenSnapshot = ref
-        .read(authCredentialsStoreProvider)
-        .value
-        ?.uiAccessToken;
+    ref.watch(
+      authCredentialsStoreProvider.select(
+        (value) => (
+          value.value?.accountBinding?.catalogId,
+          value.value?.sessionEpoch,
+          value.value?.sessionChanging,
+        ),
+      ),
+    );
+    final credentials = ref.read(authCredentialsStoreProvider).value;
+    final uiAccessTokenSnapshot = credentials?.uiAccessToken;
 
     final baseApi = serverFileUrl(
       path: imageUrl,
@@ -266,6 +295,13 @@ class ServerImage extends HookConsumerWidget {
       port: ref.watch(serverPortProvider),
       addPort: ref.watch(serverPortToggleProvider).ifNull(),
       appendApiToUrl: appendApiToUrl,
+    );
+
+    final cacheKey = accountImageCacheKey(
+      baseApi,
+      authType: authType,
+      store: ref.read(authCredentialsStoreProvider.notifier),
+      credentials: credentials,
     );
 
     Map<String, String>? httpHeaders;
@@ -283,35 +319,16 @@ class ServerImage extends HookConsumerWidget {
       );
     }
 
-    // For ui_login, append ?token= since cached_network_image can't
-    // reliably inject Authorization headers across platforms. Use the
-    // un-tokened URL as cacheKey so token rotation doesn't bust cache.
-    // Token value is read non-reactively above — if it rotates while
-    // the widget exists, the widget won't rebuild and will keep using
-    // the snapshot token. That's safe for cached images (cacheKey
-    // hit, no HTTP). For uncached images the snapshot may be slightly
-    // stale, but the proactive refresh schedules at exp-60s so the
-    // snapshot is virtually always within the server's grace window;
-    // worst case the request 401s once and the next widget rebuild
-    // picks up the new token.
     final fetchUrl = appendUiLoginToken(
       baseApi,
       authType == AuthType.uiLogin ? uiAccessTokenSnapshot : null,
     );
 
-    // Covers/icons go to the durable cover store; pages stay on the default
-    // temp-dir manager. Offline library covers render from this cache, so it
-    // must not share the page ring buffer's 200-object cap.
+    // Native covers use durable storage separate from the page cache.
+    // Web covers and pages share the credential-aware memory cache.
     final cacheManager = isCoverImagePath(imageUrl)
         ? ref.watch(coverCacheManagerProvider)
-        : DefaultCacheManager();
-
-    final ImageRenderMethodForWeb renderMethod;
-    if (httpHeaders != null) {
-      renderMethod = ImageRenderMethodForWeb.HttpGet;
-    } else {
-      renderMethod = ImageRenderMethodForWeb.HtmlImage;
-    }
+        : ref.watch(serverPageCacheManagerProvider);
 
     // Covers re-decode from disk within a few frames after any cache clear
     // (tab switch under pressure, background trim). Delaying the shimmer
@@ -320,12 +337,21 @@ class ServerImage extends HookConsumerWidget {
         ? const DelayedShimmer()
         : const CenterSorayomiShimmerIndicator();
     finalProgressIndicatorBuilder(
-            BuildContext context, String url, DownloadProgress progress) =>
-        AppUtils.wrapOn(
-          wrapper,
-          progressIndicatorBuilder?.call(context, url, progress) ??
-              defaultIndicator,
-        );
+      BuildContext context,
+      String url,
+      DownloadProgress progress,
+    ) => AppUtils.wrapOn(
+      wrapper,
+      progressIndicatorBuilder?.call(context, url, progress) ??
+          defaultIndicator,
+    );
+
+    final reloadStore = ref.read(authCredentialsStoreProvider.notifier);
+    final reloadEpoch = reloadStore.sessionEpoch;
+    bool canReload() =>
+        context.mounted &&
+        !reloadStore.sessionChanging &&
+        reloadStore.sessionEpoch == reloadEpoch;
 
     Widget errorWidget(BuildContext context, String error, stackTrace) {
       if (showReloadButton) {
@@ -338,42 +364,25 @@ class ServerImage extends HookConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(
-                    Icons.broken_image_rounded,
-                    color: Colors.grey,
-                  ),
+                  const Icon(Icons.broken_image_rounded, color: Colors.grey),
                   const Gap(32),
                   TextButton(
                     onPressed: () async {
-                      // 1. Evict any cached entry. CachedNetworkImage
-                      //    stores under our explicit cacheKey (baseApi),
-                      //    but defensively evict fetchUrl too in case
-                      //    the lib ever falls back to imageUrl. Idempotent
-                      //    + cheap — non-existent entries are a no-op.
-                      //    Wrapped in try/catch because removeFile
-                      //    throws on missing entries on some platforms.
-                      for (final keyToEvict in {baseApi, fetchUrl}) {
-                        try {
-                          await cacheManager.removeFile(keyToEvict);
-                        } catch (_) {/* not in cache; ignore */}
-                      }
-                      // 2. Speculatively refresh if the ui_login access
-                      //    token is within leadTime of expiry. Internally
-                      //    gated on authType == uiLogin so this is a true
-                      //    no-op for basic/simple — no GQL traffic.
-                      try {
-                        await ref
-                            .read(authCoordinatorProvider.notifier)
-                            .refreshUiAccessTokenIfDue(
-                              gqlClient: ref.read(graphQlClientProvider),
-                            );
-                      } catch (_) {/* refresh failures degrade to retry */}
-                      // 3. Remount. On RefreshSuccess the store was
-                      //    updated synchronously, so the rebuild sees
-                      //    fresh creds. On transient failure we remount
-                      //    with stale creds and let the user retry —
-                      //    correct behavior for non-auth errors.
-                      key.value = (UniqueKey());
+                      final ready = await reloadServerImage(
+                        cacheKeys: {cacheKey},
+                        isCurrentSession: canReload,
+                        evict: cacheManager.removeFile,
+                        refresh: () async {
+                          await ref
+                              .read(authCoordinatorProvider.notifier)
+                              .refreshUiAccessTokenIfDue(
+                                gqlClient: ref.read(
+                                  unauthenticatedGraphQlClientProvider,
+                                ),
+                              );
+                        },
+                      );
+                      if (ready && canReload()) key.value = UniqueKey();
                     },
                     child: Text(context.l10n.reload),
                   ),
@@ -385,22 +394,22 @@ class ServerImage extends HookConsumerWidget {
       } else {
         return AppUtils.wrapOn(
           wrapper,
-          const Icon(
-            Icons.broken_image_rounded,
-            color: Colors.grey,
-          ),
+          const Icon(Icons.broken_image_rounded, color: Colors.grey),
         );
       }
     }
 
     if (wantCrop) {
-      return renderCrop(CroppedImageProvider(
-        fetchUrl: fetchUrl,
-        cacheKey: baseApi,
-        headers: httpHeaders,
-        targetWidth: cacheWidth,
-        targetHeight: cacheHeight,
-      ));
+      return renderCrop(
+        CroppedImageProvider(
+          fetchUrl: fetchUrl,
+          cacheKey: cacheKey,
+          cacheManager: cacheManager,
+          headers: httpHeaders,
+          targetWidth: cacheWidth,
+          targetHeight: cacheHeight,
+        ),
+      );
     }
 
     // cached_network_image hands `imageBuilder` the RAW provider, so its
@@ -410,12 +419,12 @@ class ServerImage extends HookConsumerWidget {
     final imageBuilderCapped = imageBuilder == null
         ? null
         : (BuildContext ctx, ImageProvider provider) =>
-            imageBuilder!(ctx, _capDecode(provider, cacheWidth, cacheHeight));
+              imageBuilder!(ctx, _capDecode(provider, cacheWidth, cacheHeight));
 
     return CachedNetworkImage(
       key: key.value,
       imageUrl: fetchUrl,
-      cacheKey: baseApi,
+      cacheKey: cacheKey,
       height: size?.height,
       cacheManager: cacheManager,
       httpHeaders: httpHeaders,
@@ -427,7 +436,7 @@ class ServerImage extends HookConsumerWidget {
       fadeInDuration: const Duration(milliseconds: 150),
       memCacheWidth: imageBuilder == null ? cacheWidth : null,
       memCacheHeight: imageBuilder == null ? cacheHeight : null,
-      imageRenderMethodForWeb: renderMethod,
+      imageRenderMethodForWeb: ImageRenderMethodForWeb.HttpGet,
       progressIndicatorBuilder: finalProgressIndicatorBuilder,
       imageBuilder: imageBuilderCapped,
       errorWidget: errorWidget,
@@ -464,7 +473,7 @@ class ServerImageWithCpi extends StatelessWidget {
               size: innerSize,
               progressIndicatorBuilder: (context, url, progress) =>
                   const CenterSorayomiShimmerIndicator(),
-            )
+            ),
           ],
         ),
       );
@@ -478,23 +487,34 @@ class ServerImageWithCpi extends StatelessWidget {
 /// [imageUrl] — so a caller that needs the raw bytes (e.g. the crop-borders
 /// path) hits the SAME cache entry with the SAME auth instead of re-deriving.
 /// [localPath] is set for offline/`file://` pages (bytes come from disk).
-({String fetchUrl, String cacheKey, Map<String, String>? headers, String? localPath})
-    serverImageRequest(
+({
+  String fetchUrl,
+  String cacheKey,
+  Map<String, String>? headers,
+  String? localPath,
+})
+serverImageRequest(
   WidgetRef ref,
   String imageUrl, {
   bool appendApiToUrl = false,
 }) {
-  final localPath =
-      imageUrl.startsWith('file:') ? Uri.parse(imageUrl).toFilePath() : null;
+  final localPath = imageUrl.startsWith('file:')
+      ? Uri.parse(imageUrl).toFilePath()
+      : null;
   if (localPath != null) {
-    return (fetchUrl: imageUrl, cacheKey: imageUrl, headers: null, localPath: localPath);
+    return (
+      fetchUrl: imageUrl,
+      cacheKey: imageUrl,
+      headers: null,
+      localPath: localPath,
+    );
   }
 
   final authType = ref.read(authTypeKeyProvider);
   final basicToken = ref.read(credentialsProvider).value;
   final creds = ref.read(authCredentialsStoreProvider).value;
 
-  final cacheKey = serverFileUrl(
+  final rawUrl = serverFileUrl(
     path: imageUrl,
     baseUrl: ref.read(serverUrlProvider),
     port: ref.read(serverPortProvider),
@@ -508,8 +528,7 @@ class ServerImageWithCpi extends StatelessWidget {
   } else if (authType == AuthType.simpleLogin) {
     headers = creds?.simpleLoginCookieHeader;
   }
-  final customHeaders =
-      ref.read(customHttpHeadersProvider).value ?? const {};
+  final customHeaders = ref.read(customHttpHeadersProvider).value ?? const {};
   if (customHeaders.isNotEmpty) {
     headers = applyCustomHeaders(
       Map<String, String>.from(headers ?? const {}),
@@ -518,10 +537,21 @@ class ServerImageWithCpi extends StatelessWidget {
   }
 
   final fetchUrl = appendUiLoginToken(
-    cacheKey,
+    rawUrl,
     authType == AuthType.uiLogin ? creds?.uiAccessToken : null,
   );
-  return (fetchUrl: fetchUrl, cacheKey: cacheKey, headers: headers, localPath: null);
+  final cacheKey = accountImageCacheKey(
+    rawUrl,
+    authType: authType,
+    store: ref.read(authCredentialsStoreProvider.notifier),
+    credentials: creds,
+  );
+  return (
+    fetchUrl: fetchUrl,
+    cacheKey: cacheKey,
+    headers: headers,
+    localPath: null,
+  );
 }
 
 /// The [ImageProvider] matching what [ServerImage] renders for [imageUrl] —
@@ -535,48 +565,21 @@ ImageProvider serverPageImageProvider(
   String imageUrl, {
   bool appendApiToUrl = false,
 }) {
-  final localPath =
-      imageUrl.startsWith('file:') ? Uri.parse(imageUrl).toFilePath() : null;
-  if (localPath != null) return offlineImageProvider(localPath);
-
-  final authType = ref.read(authTypeKeyProvider);
-  final basicToken = ref.read(credentialsProvider).value;
-  final creds = ref.read(authCredentialsStoreProvider).value;
-
-  final baseApi = serverFileUrl(
-    path: imageUrl,
-    baseUrl: ref.read(serverUrlProvider),
-    port: ref.read(serverPortProvider),
-    addPort: ref.read(serverPortToggleProvider).ifNull(),
+  final request = serverImageRequest(
+    ref,
+    imageUrl,
     appendApiToUrl: appendApiToUrl,
   );
-
-  Map<String, String>? httpHeaders;
-  if (authType == AuthType.basic && basicToken != null) {
-    httpHeaders = {"Authorization": basicToken};
-  } else if (authType == AuthType.simpleLogin) {
-    httpHeaders = creds?.simpleLoginCookieHeader;
+  if (request.localPath != null) {
+    return offlineImageProvider(request.localPath!);
   }
-  final customHeaders =
-      ref.read(customHttpHeadersProvider).value ?? const {};
-  if (customHeaders.isNotEmpty) {
-    httpHeaders = applyCustomHeaders(
-      Map<String, String>.from(httpHeaders ?? const {}),
-      customHeaders,
-    );
-  }
-
-  final fetchUrl = appendUiLoginToken(
-    baseApi,
-    authType == AuthType.uiLogin ? creds?.uiAccessToken : null,
-  );
-
   return CachedNetworkImageProvider(
-    fetchUrl,
-    cacheKey: baseApi,
+    request.fetchUrl,
+    cacheKey: request.cacheKey,
     cacheManager: isCoverImagePath(imageUrl)
         ? ref.read(coverCacheManagerProvider)
-        : DefaultCacheManager(),
-    headers: httpHeaders,
+        : ref.read(serverPageCacheManagerProvider),
+    headers: request.headers,
+    imageRenderMethodForWeb: ImageRenderMethodForWeb.HttpGet,
   );
 }

@@ -6,6 +6,16 @@
 
 import 'package:http/http.dart' as http;
 
+import '../../onboarding/data/server_resolver.dart' show authProbeAuthorized;
+
+import 'simple_login_session_client_io.dart'
+    if (dart.library.js_interop) 'simple_login_session_client_web.dart';
+
+/// Stored in place of a cookie value when the browser owns the session, so
+/// "are we signed in" stays a simple non-empty check while nothing tries to
+/// set a `Cookie` header that browsers forbid anyway.
+const kBrowserManagedSimpleSession = 'browser-managed-session';
+
 /// Thrown when `POST /login.html` returns HTTP 200 (Suwayomi's way of
 /// signalling invalid credentials — it re-renders the login HTML).
 class SimpleLoginAuthFailure implements Exception {
@@ -23,12 +33,28 @@ class SimpleLoginShapeFailure implements Exception {
   String toString() => 'SimpleLoginShapeFailure: $message';
 }
 
+class SimpleLoginSessionFailure extends SimpleLoginShapeFailure {
+  const SimpleLoginSessionFailure()
+    : super('The server did not confirm the browser session');
+}
+
 /// Talks to Suwayomi-Server's `simple_login` auth mode.
 class SimpleLoginClient {
-  SimpleLoginClient({http.Client? httpClient})
-      : _http = httpClient ?? http.Client();
+  SimpleLoginClient({
+    http.Client? httpClient,
+    bool? browserSession,
+    this.timeout = const Duration(seconds: 30),
+  }) : _http = httpClient ?? makeSimpleLoginClient(timeout),
+       _browserSession = browserSession ?? browserManagesSession;
 
   final http.Client _http;
+  final Duration timeout;
+
+  void close() => _http.close();
+
+  /// True where the browser owns the cookie jar. Injectable so both paths are
+  /// testable off the browser.
+  final bool _browserSession;
 
   /// POSTs username + password to `<serverBaseUrl>/login.html` and returns
   /// the value of the `Set-Cookie` header (typically
@@ -47,7 +73,11 @@ class SimpleLoginClient {
       ..bodyFields = {'user': username, 'pass': password}
       ..headers['Content-Type'] =
           'application/x-www-form-urlencoded; charset=utf-8'
-      ..followRedirects = false;
+      // Native keeps the redirect unfollowed so `Set-Cookie` is readable
+      // (#425). In a browser that same flag becomes fetch `redirect: 'error'`,
+      // which fails the request the moment the 303 arrives — and there is
+      // nothing to read there anyway, so let the browser follow it.
+      ..followRedirects = _browserSession;
     if (extraHeaders != null && extraHeaders.isNotEmpty) {
       for (final entry in extraHeaders.entries) {
         final lower = entry.key.toLowerCase();
@@ -55,23 +85,49 @@ class SimpleLoginClient {
         request.headers[entry.key] = entry.value;
       }
     }
-    final response = await http.Response.fromStream(await _http.send(request));
+    final response = await http.Response.fromStream(
+      await _http.send(request),
+    ).timeout(timeout);
+
+    if (_browserSession) {
+      // Fetch forbids reading Set-Cookie; a protected request must verify the session.
+      if (_looksLikeLoginForm(response.body)) {
+        throw const SimpleLoginAuthFailure();
+      }
+      if (response.statusCode >= 400) {
+        throw SimpleLoginShapeFailure(
+          'unexpected status ${response.statusCode}',
+        );
+      }
+      if (!await authProbeAuthorized(
+        serverBaseUrl,
+        client: _http,
+        timeout: timeout,
+        extraHeaders: extraHeaders,
+      )) {
+        throw const SimpleLoginSessionFailure();
+      }
+      return kBrowserManagedSimpleSession;
+    }
 
     if (response.statusCode == 200) {
       // Server re-rendered the login page → bad credentials.
       throw const SimpleLoginAuthFailure();
     }
     if (response.statusCode != 303) {
-      throw SimpleLoginShapeFailure(
-          'unexpected status ${response.statusCode}');
+      throw SimpleLoginShapeFailure('unexpected status ${response.statusCode}');
     }
     final setCookie = response.headers['set-cookie'];
     if (setCookie == null || setCookie.isEmpty) {
       throw const SimpleLoginShapeFailure(
-          '303 response had no Set-Cookie header');
+        '303 response had no Set-Cookie header',
+      );
     }
     // `Set-Cookie: JSESSIONID=abc; Path=/; HttpOnly` → keep just
     // "JSESSIONID=abc" for the outgoing Cookie header on later requests.
     return setCookie.split(';').first.trim();
   }
+
+  static bool _looksLikeLoginForm(String body) =>
+      body.contains('name="user"') && body.contains('name="pass"');
 }

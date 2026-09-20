@@ -34,9 +34,13 @@ Future<void> reconcileReadAcrossScanlators(
   if (all == null) return;
   final ids = reconcileIdsForReadNumbers(all);
   if (ids.isEmpty) return;
-  await ref.read(mangaBookRepositoryProvider).modifyBulkChapters(
+  await ref
+      .read(mangaBookRepositoryProvider)
+      .modifyBulkChapters(
         ChapterBatch(
-            ids: ids, patch: ChapterChange(isRead: true, lastPageRead: 0)),
+          ids: ids,
+          patch: ChapterChange(isRead: true, lastPageRead: 0),
+        ),
       );
   ref.invalidate(mangaChapterListProvider(mangaId: mangaId));
 }

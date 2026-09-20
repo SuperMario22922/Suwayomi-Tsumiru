@@ -19,10 +19,17 @@ import '../../../../global_providers/global_providers.dart';
 import '../../../../utils/extensions/custom_extensions.dart';
 import '../../../../utils/misc/toast/toast.dart';
 import '../../../../widgets/section_title.dart';
+import '../../../account/data/account_actions.dart';
+import '../../../account/data/account_providers.dart';
+import '../../../account/domain/account_access.dart';
+import '../../../account/presentation/account_code_dialog.dart';
+import '../../../auth/data/auth_session_status.dart';
+import '../../../auth/presentation/auth_failure_text.dart';
 import '../../../offline/data/background/background_download_controller_shim.dart';
 import '../server/widget/client/server_port_tile/server_port_tile.dart';
 import '../server/widget/client/server_url_tile/server_url_tile.dart';
 import '../server/widget/credential_popup/login_credentials_popup.dart';
+import 'prompt_sign_in.dart';
 
 /// Connection-screen authentication, state-aware:
 ///   * No auth configured  -> just the auth-mode picker.
@@ -40,10 +47,14 @@ class InlineAuthSection extends HookConsumerWidget {
     final needsReauth = ref.watch(needsReauthProvider);
     final storedUsername = ref.watch(authUsernameProvider);
 
-    // "Signed in" = an auth mode is set and the session isn't flagged broken.
-    // Changing the auth mode (below) sets needsReauth, so a freshly-picked
-    // mode correctly shows the login form until the user actually signs in.
-    final signedIn = authType != AuthType.none && !needsReauth;
+    final signedIn =
+        authType != AuthType.none &&
+        ref.watch(hasStoredCredentialsProvider) &&
+        !needsReauth;
+    final showAccountCodes =
+        authType == AuthType.uiLogin &&
+        ref.watch(settledAccountAccessProvider).capability !=
+            AccountCapability.unsupported;
 
     final username = useTextEditingController(text: storedUsername ?? '');
     final password = useTextEditingController();
@@ -52,10 +63,14 @@ class InlineAuthSection extends HookConsumerWidget {
     final message = useState<String?>(null);
     final isError = useState(false);
 
+    // The server ROOT, not the API base: sign-in and the auth probe append
+    // their own paths (`/login.html`, `api/graphql`), so an `/api/v1` here
+    // posts Simple Login to `/api/v1/login.html` and 404s.
     String resolvedBaseUrl() => Endpoints.baseApi(
       baseUrl: ref.read(serverUrlProvider) ?? DBKeys.serverUrl.initial,
       port: ref.read(serverPortProvider),
       addPort: ref.read(serverPortToggleProvider).ifNull(),
+      appendApiToUrl: false,
     );
 
     // Validate the entered credentials WITHOUT committing them.
@@ -75,7 +90,8 @@ class InlineAuthSection extends HookConsumerWidget {
               serverBaseUrl: resolvedBaseUrl(),
               username: username.text.trim(),
               password: password.text,
-              makeGqlClient: () => ref.read(graphQlClientProvider),
+              makeGqlClient: () =>
+                  ref.read(unauthenticatedGraphQlClientProvider),
             );
         if (!context.mounted) return;
         if (result is TestConnectionSuccess) {
@@ -83,12 +99,12 @@ class InlineAuthSection extends HookConsumerWidget {
           message.value = context.l10n.authTestConnectionSuccess;
         } else if (result is TestConnectionFailure) {
           isError.value = true;
-          message.value = _failureText(context, result.kind);
+          message.value = authFailureText(context, result.kind);
         }
       } catch (e) {
         if (!context.mounted) return;
         isError.value = true;
-        message.value = _failureText(context, classifyAuthError(e).kind);
+        message.value = authFailureText(context, classifyAuthError(e).kind);
       } finally {
         if (context.mounted) testing.value = false;
       }
@@ -119,13 +135,25 @@ class InlineAuthSection extends HookConsumerWidget {
       } catch (e) {
         if (!context.mounted) return;
         isError.value = true;
-        message.value = _failureText(context, classifyAuthError(e).kind);
+        message.value = authFailureText(context, classifyAuthError(e).kind);
       } finally {
         if (context.mounted) busy.value = false;
       }
     }
 
+    Future<void> openCodeDialog(AccountCodeMode mode) async {
+      final redeem = ref.read(accountActionsProvider).redeemCode;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AccountCodeDialog(mode: mode, onSubmit: redeem),
+      );
+    }
+
     Future<void> logout() async {
+      final signOut = ref.read(accountActionsProvider).signOut;
+      final current = ref
+          .read(authCredentialsStoreProvider.notifier)
+          .captureSession();
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogCtx) => AlertDialog(
@@ -147,24 +175,16 @@ class InlineAuthSection extends HookConsumerWidget {
           ],
         ),
       );
-      if (confirmed != true) return;
-      await ref.read(backgroundDownloadControllerProvider).changeIdentity(
-        () async {
-          final store = ref.read(authCredentialsStoreProvider.notifier);
-          await store.clearUiLoginTokens();
-          await store.clearSimpleLoginCookie();
-          await store.clearPassword();
-          await store.clearBasicCredentials();
-          ref.read(authTypeKeyProvider.notifier).update(AuthType.none);
-          ref.read(needsReauthProvider.notifier).set(false);
-        },
-      );
+      if (confirmed != true || !context.mounted || !current()) return;
+      await signOut();
+      if (!context.mounted) return;
       password.clear();
       message.value = null;
     }
 
     Future<void> onAuthModeChanged(AuthType? next) async {
       if (next == null || next == authType) return;
+      stayOnConnectionAfterIdentityChange();
       await ref.read(backgroundDownloadControllerProvider).changeIdentity(
         () async {
           if (next == AuthType.none) {
@@ -172,13 +192,16 @@ class InlineAuthSection extends HookConsumerWidget {
             await store.clearUiLoginTokens();
             await store.clearSimpleLoginCookie();
             await store.clearBasicCredentials();
-            ref.read(needsReauthProvider.notifier).set(false);
-          } else {
-            ref.read(needsReauthProvider.notifier).set(true);
           }
+          // No "Session expired" banner here. Nothing expired: the user just
+          // picked a different mode and is standing on the sign-in fields, so
+          // the banner only flashed across the top and then went away. A real
+          // expiry still raises it from the request paths that meet the 401.
+          ref.read(needsReauthProvider.notifier).set(false);
           ref.read(authTypeKeyProvider.notifier).update(next);
         },
       );
+      if (!context.mounted) return;
       message.value = null;
       password.clear();
     }
@@ -271,6 +294,25 @@ class InlineAuthSection extends HookConsumerWidget {
                 onSubmitted: (_) => signIn(),
               ),
             ),
+            if (showAccountCodes)
+              pad(
+                Wrap(
+                  children: [
+                    TextButton(
+                      onPressed: busy.value || testing.value
+                          ? null
+                          : () => openCodeDialog(AccountCodeMode.registration),
+                      child: Text(context.l10n.accountRegistrationTitle),
+                    ),
+                    TextButton(
+                      onPressed: busy.value || testing.value
+                          ? null
+                          : () => openCodeDialog(AccountCodeMode.recovery),
+                      child: Text(context.l10n.accountRecoveryTitle),
+                    ),
+                  ],
+                ),
+              ),
             if (message.value != null)
               pad(
                 Text(
@@ -323,18 +365,3 @@ class InlineAuthSection extends HookConsumerWidget {
     );
   }
 }
-
-String _failureText(BuildContext context, TestConnectionFailureKind kind) =>
-    switch (kind) {
-      TestConnectionFailureKind.network =>
-        context.l10n.authTestConnectionFailedNetwork,
-      TestConnectionFailureKind.tls => context.l10n.authTestConnectionFailedTls,
-      TestConnectionFailureKind.invalidCredentials =>
-        context.l10n.authTestConnectionFailedAuth,
-      TestConnectionFailureKind.wrongAuthMode =>
-        context.l10n.authTestConnectionFailedMode,
-      TestConnectionFailureKind.unexpectedShape =>
-        context.l10n.authTestConnectionFailedShape,
-      TestConnectionFailureKind.insecureTransport =>
-        context.l10n.authInsecureTransportWarning,
-    };

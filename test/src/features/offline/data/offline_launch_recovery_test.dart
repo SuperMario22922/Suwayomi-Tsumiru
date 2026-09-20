@@ -77,6 +77,33 @@ void main() {
     updatedAt: DateTime(2026),
   );
 
+  for (final location in ['final', 'staging', 'superseded']) {
+    test('recovery preserves terminal error and $location pages', () async {
+      await seedChapter(1, 7);
+      await db.setChapterDeviceState(1, OfflineDeviceState.error);
+      await db.incrementServerFetchAttempts(1);
+      if (location == 'staging') {
+        store.seedStaged(1, {0: 5, 1: 5}, indices: [0, 1]);
+      } else {
+        store.seedCommitted(1, {0: 5, 1: 5});
+        if (location == 'superseded') store.setAside(1);
+      }
+      await recoverChaptersOnDisk(db: db, store: store);
+      final row = (await db.chapterById(1))!;
+      expect(row.deviceState, OfflineDeviceState.error);
+      expect(row.serverFetchAttempts, 1);
+      expect(await db.downloadedPageCount(1), 0);
+      expect(store.committed[1], location == 'final' ? {0: 5, 1: 5} : null);
+      expect(store.staged[1], location == 'staging' ? {0: 5, 1: 5} : null);
+      expect(
+        store.superseded[1],
+        location == 'superseded' ? {0: 5, 1: 5} : null,
+      );
+      expect(store.deletedChapters, isEmpty);
+      expect(store.written, isEmpty);
+    });
+  }
+
   // Mirror the desktop launch order: disk recovery (now split out of
   // initOfflineDownloads) runs first, then the pump resumes the queue.
   Future<void> launchRecoverAndResume(Future<ProviderContainer> cf) async {
@@ -162,23 +189,20 @@ void main() {
     );
   });
 
-  test(
-    'recoverDiskAtLaunch settles disk on its own, with no pump — it is the '
-    'step the launch path runs before reconcile',
-    () async {
-      await seedChapter(1, 7);
-      await db.setChapterDeviceState(1, OfflineDeviceState.downloading);
-      // Commit landed, catalog write didn't.
-      store.seedCommitted(1, {0: 5, 1: 5});
+  test('recoverDiskAtLaunch settles disk on its own, with no pump — it is the '
+      'step the launch path runs before reconcile', () async {
+    await seedChapter(1, 7);
+    await db.setChapterDeviceState(1, OfflineDeviceState.downloading);
+    // Commit landed, catalog write didn't.
+    store.seedCommitted(1, {0: 5, 1: 5});
 
-      await recoverDiskAtLaunch(await container());
+    await recoverDiskAtLaunch(await container());
 
-      expect(
-        (await db.chapterById(1))!.deviceState,
-        OfflineDeviceState.downloaded,
-        reason: 'recovery adopts the on-disk copy without needing the pump',
-      );
-      expect(store.written, isEmpty, reason: 'nothing was re-downloaded');
-    },
-  );
+    expect(
+      (await db.chapterById(1))!.deviceState,
+      OfflineDeviceState.downloaded,
+      reason: 'recovery adopts the on-disk copy without needing the pump',
+    );
+    expect(store.written, isEmpty, reason: 'nothing was re-downloaded');
+  });
 }

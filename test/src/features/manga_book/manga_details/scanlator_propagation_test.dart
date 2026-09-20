@@ -90,11 +90,15 @@ void main() {
 
     test('does not reconcile uncertain same-number rows', () {
       final chapters = [
-        ch(id: 1, number: 6, name: 'Chapter 6', scanlator: 'A',
-            isRead: true),
+        ch(id: 1, number: 6, name: 'Chapter 6', scanlator: 'A', isRead: true),
         ch(id: 2, number: 6, name: 'Special 6', scanlator: 'B'),
-        ch(id: 3, number: 1, name: 'Season 1 Chapter 1', scanlator: 'A',
-            isRead: true),
+        ch(
+          id: 3,
+          number: 1,
+          name: 'Season 1 Chapter 1',
+          scanlator: 'A',
+          isRead: true,
+        ),
         ch(id: 4, number: 1, name: 'Season 2 Chapter 1', scanlator: 'B'),
       ];
       expect(reconcileIdsForReadNumbers(chapters), isEmpty);

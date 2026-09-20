@@ -15,10 +15,15 @@ import '../../../../../../constants/endpoints.dart';
 import '../../../../../../constants/enum.dart';
 import '../../../../../../features/auth/data/auth_coordinator.dart';
 import '../../../../../../features/auth/data/auth_credentials_store.dart';
+import '../../../../../../features/auth/presentation/auth_failure_text.dart';
 import '../../../../../../global_providers/global_providers.dart';
 import '../../../../../../utils/extensions/custom_extensions.dart';
 import '../../../../../../utils/mixin/shared_preferences_client_mixin.dart';
 import '../../../../../../widgets/popup_widgets/pop_button.dart';
+import '../../../../../account/data/account_actions.dart';
+import '../../../../../account/data/account_providers.dart';
+import '../../../../../account/domain/account_access.dart';
+import '../../../../../account/presentation/account_code_dialog.dart';
 import '../../../../../offline/data/background/background_download_controller_shim.dart';
 import '../client/server_port_tile/server_port_tile.dart';
 import '../client/server_url_tile/server_url_tile.dart';
@@ -47,6 +52,27 @@ class LoginCredentialsPopup extends HookConsumerWidget {
     final testing = useState(false);
     final testResult = useState<String?>(null);
     final testResultIsError = useState(false);
+    final showAccountCodes =
+        authType == AuthType.uiLogin &&
+        (ref.watch(authTypeKeyProvider) != AuthType.uiLogin ||
+            ref.watch(settledAccountAccessProvider).capability !=
+                AccountCapability.unsupported);
+
+    Future<void> openCodeDialog(AccountCodeMode mode) async {
+      final redeem = ref.read(accountActionsProvider).redeemCode;
+      var completed = false;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AccountCodeDialog(
+          mode: mode,
+          onSubmit: ({required code, username, required password}) async {
+            await redeem(code: code, username: username, password: password);
+            completed = true;
+          },
+        ),
+      );
+      if (completed && context.mounted) Navigator.pop(context);
+    }
 
     Future<bool> confirmInsecureIfNeeded(String resolvedUrl) async {
       if (!resolvedUrl.startsWith('http://')) return true;
@@ -78,10 +104,12 @@ class LoginCredentialsPopup extends HookConsumerWidget {
 
     String resolveBaseUrl() {
       final baseUrl = ref.read(serverUrlProvider) ?? DBKeys.serverUrl.initial;
+      // The server ROOT — see the same note in inline_auth_section.
       return Endpoints.baseApi(
         baseUrl: baseUrl,
         port: ref.read(serverPortProvider),
         addPort: ref.read(serverPortToggleProvider).ifNull(),
+        appendApiToUrl: false,
       );
     }
 
@@ -103,7 +131,8 @@ class LoginCredentialsPopup extends HookConsumerWidget {
               serverBaseUrl: resolvedUrl,
               username: username.text,
               password: password.text,
-              makeGqlClient: () => ref.read(graphQlClientProvider),
+              makeGqlClient: () =>
+                  ref.read(unauthenticatedGraphQlClientProvider),
             );
         if (!context.mounted) return;
         if (result is TestConnectionSuccess) {
@@ -111,7 +140,7 @@ class LoginCredentialsPopup extends HookConsumerWidget {
           testResultIsError.value = false;
         } else if (result is TestConnectionFailure) {
           testResultIsError.value = true;
-          testResult.value = _failureMessage(context, result.kind);
+          testResult.value = authFailureText(context, result.kind);
         }
       } finally {
         if (context.mounted) testing.value = false;
@@ -146,7 +175,7 @@ class LoginCredentialsPopup extends HookConsumerWidget {
               await store.clearSimpleLoginCookie();
               await store.clearBasicCredentials();
               await coordinator.loginUi(
-                gqlClient: ref.read(graphQlClientProvider),
+                gqlClient: ref.read(unauthenticatedGraphQlClientProvider),
                 username: username.text,
                 password: password.text,
               );
@@ -157,13 +186,14 @@ class LoginCredentialsPopup extends HookConsumerWidget {
       } catch (e) {
         if (!context.mounted) return;
         testResultIsError.value = true;
-        testResult.value = _failureMessage(context, classifyAuthError(e).kind);
+        testResult.value = authFailureText(context, classifyAuthError(e).kind);
       } finally {
         if (context.mounted) testing.value = false;
       }
     }
 
     return AlertDialog(
+      scrollable: true,
       title: Text(context.l10n.credentials),
       content: Form(
         key: formKey,
@@ -209,6 +239,23 @@ class LoginCredentialsPopup extends HookConsumerWidget {
                 ),
               ),
             ],
+            if (showAccountCodes)
+              Wrap(
+                children: [
+                  TextButton(
+                    onPressed: testing.value
+                        ? null
+                        : () => openCodeDialog(AccountCodeMode.registration),
+                    child: Text(context.l10n.accountRegistrationTitle),
+                  ),
+                  TextButton(
+                    onPressed: testing.value
+                        ? null
+                        : () => openCodeDialog(AccountCodeMode.recovery),
+                    child: Text(context.l10n.accountRecoveryTitle),
+                  ),
+                ],
+              ),
             if (testResult.value != null) ...[
               const Gap(8),
               ConstrainedBox(
@@ -270,20 +317,4 @@ bool isLocalAddress(String url) {
   if (a == 192 && b == 168) return true; // 192.168.0.0/16
   if (a == 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
   return false;
-}
-
-String _failureMessage(BuildContext context, TestConnectionFailureKind kind) {
-  return switch (kind) {
-    TestConnectionFailureKind.network =>
-      context.l10n.authTestConnectionFailedNetwork,
-    TestConnectionFailureKind.tls => context.l10n.authTestConnectionFailedTls,
-    TestConnectionFailureKind.invalidCredentials =>
-      context.l10n.authTestConnectionFailedAuth,
-    TestConnectionFailureKind.wrongAuthMode =>
-      context.l10n.authTestConnectionFailedMode,
-    TestConnectionFailureKind.unexpectedShape =>
-      context.l10n.authTestConnectionFailedShape,
-    TestConnectionFailureKind.insecureTransport =>
-      context.l10n.authInsecureTransportWarning,
-  };
 }

@@ -65,8 +65,7 @@ List<List<ChapterDto>> _confidentReleaseGroups(List<ChapterDto> chapters) {
     final groupAlreadyPresent = current.any(
       (candidate) => scanlatorGroupOf(candidate) == scanlatorGroupOf(chapter),
     );
-    if (!groupAlreadyPresent &&
-        _canConfidentlyMatch(current.last, chapter)) {
+    if (!groupAlreadyPresent && _canConfidentlyMatch(current.last, chapter)) {
       current.add(chapter);
     } else {
       releaseGroups.add([chapter]);
@@ -102,12 +101,13 @@ ChapterDto _pickReaderRelease(
         (c) => scanlatorGroupOf(c) == scanlatorGroup,
       ) ??
       preferred
-          .map((group) => candidates.firstWhereOrNull(
-                (c) => scanlatorGroupOf(c) == group,
-              ))
+          .map(
+            (group) => candidates.firstWhereOrNull(
+              (c) => scanlatorGroupOf(c) == group,
+            ),
+          )
           .firstWhereOrNull((c) => c != null) ??
-      candidates.reduce((a, b) =>
-          a.sourceOrder <= b.sourceOrder ? a : b);
+      candidates.reduce((a, b) => a.sourceOrder <= b.sourceOrder ? a : b);
 }
 
 /// Builds the reader path without globally grouping equal chapter numbers.
@@ -160,8 +160,8 @@ List<int> expandIdsForDuplicates(
 
 /// Unread releases in a confident group that already contains a read release.
 List<int> reconcileIdsForReadNumbers(List<ChapterDto> allChapters) => [
-      for (final releases in _confidentReleaseGroups(allChapters))
-        if (releases.any((chapter) => chapter.isRead))
-          for (final chapter in releases)
-            if (!chapter.isRead) chapter.id,
-    ];
+  for (final releases in _confidentReleaseGroups(allChapters))
+    if (releases.any((chapter) => chapter.isRead))
+      for (final chapter in releases)
+        if (!chapter.isRead) chapter.id,
+];

@@ -11,6 +11,7 @@ import '../../../constants/app_sizes.dart';
 import '../../../routes/router_config.dart';
 import '../../../utils/extensions/custom_extensions.dart';
 import '../../../widgets/shell/update_banner_state.dart';
+import '../../library/data/default_category.dart';
 import '../../library/domain/category/category_model.dart';
 import '../data/updates/updates_repository.dart';
 
@@ -24,6 +25,7 @@ class UpdateStatusPopupMenu extends ConsumerWidget {
   final bool showDuplicatesButton;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final defaultId = ref.watch(settledDefaultCategoryIdProvider);
     final failedCount = ref.watch(failedUpdatesProvider).value?.length ?? 0;
     return PopupMenuButton(
       icon: const Icon(Icons.more_vert_rounded),
@@ -31,7 +33,7 @@ class UpdateStatusPopupMenu extends ConsumerWidget {
       itemBuilder: (context) {
         final category = getCategory?.call();
         return [
-          if (category != null && category.id != 0)
+          if (category != null && defaultId != null && category.id != defaultId)
             PopupMenuItem(
               child: Text(context.l10n.categoryUpdate),
               onTap: () {

@@ -5,18 +5,15 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
 import '../../../../constants/endpoints.dart';
 import '../../../../utils/crash/diagnostics.dart';
+import '../../../account/data/account_permission.dart';
+import '../../../offline/data/background/background_chapter_fetch.dart';
 import '../../../offline/data/background/background_token_record.dart'
-    show
-        BackgroundTokenRecord,
-        TokenBroker,
-        applyIsolateCustomHeaders,
-        isGraphqlAuthError;
+    show BackgroundTokenRecord, TokenBroker, applyIsolateCustomHeaders;
 
 /// Where + how the background worker reaches the server. Persisted so the
 /// WorkManager isolate (no Riverpod, no widget tree) can rebuild it.
@@ -79,10 +76,16 @@ class NotificationBackgroundClient {
     required BackgroundTokenRecord record,
     required this.broker,
     http.Client? httpClient,
+    this.isCancelled,
+    this.onDownloadPermissionDenied,
+    this.admitDownload,
   }) : _record = record,
        _http = httpClient ?? http.Client();
 
   final NotificationEndpoint endpoint;
+  final bool Function()? isCancelled;
+  final Future<void> Function()? onDownloadPermissionDenied;
+  final Future<bool> Function()? admitDownload;
   final TokenBroker broker;
   final http.Client _http;
   BackgroundTokenRecord _record;
@@ -91,115 +94,94 @@ class NotificationBackgroundClient {
   /// catch-up executor shares this client's auth.
   BackgroundTokenRecord currentRecord() => _record;
 
-  static const Object _authError = Object();
-  static const Object _networkError = Object();
+  static const Object _authError = gqlAuthError;
+  static const Object _networkError = gqlNetworkError;
 
   /// One raw GraphQL POST, retrying once through the broker on a ui_login 401.
   /// Returns the `data` map, or null on auth-dead / network / server error.
   Future<Map<String, Object?>?> _post(
     String query,
-    Map<String, Object?> variables,
-  ) async {
-    var res = await _raw(query, variables, _record.accessToken);
-    if (identical(res, _authError)) {
-      if (_record.authType == 'uiLogin') {
-        final fresh = await broker.resolveAfter401(_record.accessToken ?? '');
-        if (fresh != null) {
-          _record = await broker.read();
-          res = await _raw(query, variables, fresh);
-        } else {
-          // The access token was rejected AND the refresh did not yield a new
-          // one. transient=true means the refresh call itself couldn't reach
-          // the server (retry later); transient=false means the server
-          // rejected the refresh token — auth is genuinely dead until the app
-          // is reopened and re-authenticates. This is the single most likely
-          // reason a background run that worked once fails on every wake after
-          // the access token expires.
-          recordDiagnostic(
-            '[${DateTime.now().toIso8601String()}] offline-graphql: '
-            'refresh-failed transient=${broker.lastRefreshTransient}\n',
-          );
-        }
+    Map<String, Object?> variables, {
+    bool downloadOperation = false,
+  }) async {
+    var res = await _raw(
+      query,
+      variables,
+      _record.accessToken,
+      downloadOperation: downloadOperation,
+    );
+    if (identical(res, _authError) && _record.authType == 'uiLogin') {
+      final fresh = await broker.resolveAfter401(_record.accessToken ?? '');
+      if (fresh != null) {
+        final current = await broker.readCurrent();
+        if (current == null || !current.sameIdentity(_record)) return null;
+        _record = current;
+        res = await _raw(
+          query,
+          variables,
+          fresh,
+          downloadOperation: downloadOperation,
+        );
       } else {
         recordDiagnostic(
           '[${DateTime.now().toIso8601String()}] offline-graphql: '
-          'auth-rejected authType=${_record.authType} (no refresh path)\n',
+          'refresh-failed transient=${broker.lastRefreshTransient}\n',
         );
       }
+    } else if (identical(res, _authError)) {
+      recordDiagnostic(
+        '[${DateTime.now().toIso8601String()}] offline-graphql: '
+        'auth-rejected authType=${_record.authType} (no refresh path)\n',
+      );
     }
     return res is Map<String, Object?> ? res : null;
   }
 
+  BackgroundServerTarget get _target => BackgroundServerTarget(
+    serverBase: endpoint.baseUrl,
+    port: endpoint.port,
+    addPort: endpoint.addPort,
+    client: _http,
+    isCancelled: isCancelled,
+    onNetworkError: (error) => recordDiagnostic(
+      '[${DateTime.now().toIso8601String()}] offline-graphql: $error\n',
+    ),
+  );
+
   Future<Object?> _raw(
     String query,
     Map<String, Object?> variables,
-    String? accessToken,
-  ) async {
-    final headers = <String, String>{'Content-Type': 'application/json'};
-    _applyAuth(headers, accessToken);
+    String? accessToken, {
+    bool downloadOperation = false,
+  }) async {
     try {
-      final res = await _http
-          .post(
-            Uri.parse(endpoint.graphqlUrl),
-            headers: headers,
-            body: jsonEncode({'query': query, 'variables': variables}),
-          )
-          .timeout(const Duration(seconds: 10));
-      if (res.statusCode == 401 || res.statusCode == 403) return _authError;
-      if (res.statusCode != 200) {
-        recordDiagnostic(
-          '[${DateTime.now().toIso8601String()}] offline-graphql: '
-          'http-error status=${res.statusCode}\n',
-        );
-        return _networkError;
-      }
-      final decoded = jsonDecode(res.body) as Map<String, Object?>;
-      // Suwayomi returns an expired/invalid access token as HTTP 200 with a
-      // GraphQL auth error (extensions.http.status == 401, or an "unauthorized"
-      // message), NOT an HTTP 401 — verifyJwt downgrades a bad token to Visitor
-      // and the @requireAuth field errors IN-BAND. The foreground
-      // SuwayomiAuthLink detects exactly this; the background must too. Without
-      // it the broker refresh below never fires, so every background run past
-      // the server's 5-minute access-token lifetime fails — the notification
-      // check and download resolution both return null and the worker reports
-      // ok=false forever until the app is reopened. This was THE overnight bug.
-      if (isGraphqlAuthError(decoded['errors'])) return _authError;
-      return decoded['data'] as Map<String, Object?>?;
-    } on SocketException catch (e) {
-      // Server unreachable (self-hosted server asleep, off the LAN/VPN, DNS) —
-      // distinct from an auth failure. Recorded so a background run that fails
-      // because the server is simply not reachable overnight is not mistaken
-      // for an expired-token problem.
-      recordDiagnostic(
-        '[${DateTime.now().toIso8601String()}] offline-graphql: '
-        'socket-error ${e.osError?.message ?? e.message}\n',
+      return await postBackgroundGraphql(
+        target: _target,
+        record: _record,
+        query: query,
+        variables: variables,
+        accessToken: accessToken,
       );
-      return _networkError;
-    } catch (e) {
-      // Includes TimeoutException from the 10s cap above — a slow/unreachable
-      // server rather than a rejection.
-      recordDiagnostic(
-        '[${DateTime.now().toIso8601String()}] offline-graphql: '
-        'request-error $e\n',
-      );
+    } on AccountPermissionDenied {
+      if (downloadOperation) rethrow;
       return _networkError;
     }
   }
 
-  void _applyAuth(Map<String, String> headers, String? accessToken) {
-    switch (_record.authType) {
-      case 'uiLogin':
-        if (accessToken != null && accessToken.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $accessToken';
-        }
-      case 'basic':
-        final cred = _record.basicCredential;
-        if (cred != null && cred.isNotEmpty) headers['Authorization'] = cred;
-      case 'simpleLogin':
-        final cookie = _record.simpleCookie;
-        if (cookie != null && cookie.isNotEmpty) headers['Cookie'] = cookie;
+  Future<bool> verifyDownloadAccess() async {
+    if (admitDownload != null && !await admitDownload!()) return false;
+    try {
+      return await verifyBackgroundDownloadAccess(
+        target: _target,
+        record: currentRecord,
+        broker: broker,
+      );
+    } on AccountPermissionDenied {
+      if (!(isCancelled?.call() ?? false)) {
+        await onDownloadPermissionDenied?.call();
+      }
+      return false;
     }
-    applyIsolateCustomHeaders(headers, _record.extraHeaders);
   }
 
   static const _newChaptersQuery = r'''
@@ -307,8 +289,19 @@ mutation NotifEnqueue($ids: [Int!]!) {
 
   Future<bool> enqueueDownloads(List<int> chapterIds) async {
     if (chapterIds.isEmpty) return true;
-    final data = await _post(_enqueueMutation, {'ids': chapterIds});
-    return data != null;
+    if (!await verifyDownloadAccess()) return false;
+    try {
+      final data = await _post(_enqueueMutation, {
+        'ids': chapterIds,
+      }, downloadOperation: true);
+      return !(isCancelled?.call() ?? false) &&
+          data?['enqueueChapterDownloads'] is Map;
+    } on AccountPermissionDenied {
+      if (!(isCancelled?.call() ?? false)) {
+        await onDownloadPermissionDenied?.call();
+      }
+      return false;
+    }
   }
 
   /// Fetch a manga cover's bytes for the per-series notification, mirroring

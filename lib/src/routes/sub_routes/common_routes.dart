@@ -22,7 +22,10 @@ class RecommendsRoute extends GoRouteData with $RecommendsRoute {
 }
 
 class RecommendsBrowseRoute extends GoRouteData with $RecommendsBrowseRoute {
-  const RecommendsBrowseRoute({required this.mangaId, required this.providerName});
+  const RecommendsBrowseRoute({
+    required this.mangaId,
+    required this.providerName,
+  });
   final int mangaId;
   final String providerName;
 
@@ -101,7 +104,8 @@ class _ReaderRouteTransition extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final background = ref.watch(readerBackgroundColorKeyProvider) ??
+    final background =
+        ref.watch(readerBackgroundColorKeyProvider) ??
         DBKeys.readerBackgroundColor.initial as ReaderBackgroundColor;
     return ColoredBox(
       color: background.color(context),

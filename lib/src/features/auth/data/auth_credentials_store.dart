@@ -6,10 +6,15 @@
 
 import 'dart:async';
 
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../account/domain/account_binding.dart';
+import '../../settings/presentation/server/widget/credential_popup/credentials_popup.dart';
+import 'auth_session_transition.dart';
 import 'jwt_utils.dart';
 import 'secure_credentials_provider.dart';
+import 'simple_login_client.dart';
 
 part 'auth_credentials_store.g.dart';
 
@@ -29,6 +34,9 @@ class UiLoginTokens {
 /// All fields are nullable: any value the user hasn't set is simply `null`.
 class AuthCredentialsState {
   const AuthCredentialsState({
+    this.sessionEpoch = 0,
+    this.sessionChanging = false,
+    this.accountBinding,
     this.password,
     this.simpleLoginCookie,
     this.uiAccessToken,
@@ -37,12 +45,18 @@ class AuthCredentialsState {
   });
 
   const AuthCredentialsState.empty()
-    : password = null,
+    : sessionEpoch = 0,
+      sessionChanging = false,
+      accountBinding = null,
+      password = null,
       simpleLoginCookie = null,
       uiAccessToken = null,
       uiRefreshToken = null,
       uiAccessTokenExpiresAt = null;
 
+  final AccountBinding? accountBinding;
+  final int sessionEpoch;
+  final bool sessionChanging;
   final String? password;
   final String? simpleLoginCookie;
   final String? uiAccessToken;
@@ -63,12 +77,21 @@ class AuthCredentialsState {
 
   /// Convenience: `{'Cookie': '<cookie>'}` or `null`. Used by
   /// `SuwayomiAuthLink.getHeaders` and `server_image`.
+  ///
+  /// Null when the browser owns the session: it attaches the cookie itself,
+  /// and a `Cookie` header set from page code is dropped either way.
   Map<String, String>? get simpleLoginCookieHeader =>
-      (simpleLoginCookie == null || simpleLoginCookie!.isEmpty)
+      (simpleLoginCookie == null ||
+          simpleLoginCookie!.isEmpty ||
+          simpleLoginCookie == kBrowserManagedSimpleSession)
       ? null
       : {'Cookie': simpleLoginCookie!};
 
   AuthCredentialsState copyWith({
+    int? sessionEpoch,
+    bool? sessionChanging,
+    AccountBinding? accountBinding,
+    bool clearAccountBinding = false,
     String? password,
     bool clearPassword = false,
     String? simpleLoginCookie,
@@ -81,6 +104,11 @@ class AuthCredentialsState {
     bool clearUiAccessTokenExpiresAt = false,
   }) {
     return AuthCredentialsState(
+      sessionEpoch: sessionEpoch ?? this.sessionEpoch,
+      sessionChanging: sessionChanging ?? this.sessionChanging,
+      accountBinding: clearAccountBinding
+          ? null
+          : (accountBinding ?? this.accountBinding),
       password: clearPassword ? null : (password ?? this.password),
       simpleLoginCookie: clearSimpleLoginCookie
           ? null
@@ -122,6 +150,7 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
   static const _kSimpleCookieKey = 'auth.simple.cookie';
   static const _kUiAccessKey = 'auth.ui.accessToken';
   static const _kUiRefreshKey = 'auth.ui.refreshToken';
+  static const _kAccountBindingKey = 'auth.ui.accountBinding';
   static const _kBasicCredentialsKey = 'auth.basic.credentials';
 
   @override
@@ -132,8 +161,16 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
       storage.read(key: _kSimpleCookieKey),
       storage.read(key: _kUiAccessKey),
       storage.read(key: _kUiRefreshKey),
+      storage.read(key: _kAccountBindingKey),
     ]);
     return AuthCredentialsState(
+      sessionEpoch: _sessionEpoch,
+      sessionChanging: sessionChanging,
+      accountBinding: AccountBinding.decode(
+        results[4],
+        accessToken: results[2],
+        refreshToken: results[3],
+      ),
       password: results[0],
       simpleLoginCookie: results[1],
       uiAccessToken: results[2],
@@ -155,14 +192,62 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
   int _serverEpoch = 0;
   int get serverEpoch => _serverEpoch;
   void invalidatePendingWrites() => _serverEpoch++;
+
+  int _sessionEpoch = 0;
+  int? _activeSessionEpoch;
+  int get sessionEpoch => _sessionEpoch;
+  bool get sessionAdmitted =>
+      !sessionChanging &&
+      (_activeSessionEpoch == null || _activeSessionEpoch == sessionEpoch);
+
+  void activateSession() {
+    if (sessionChanging) throw StateError('Authentication session is changing');
+    _activeSessionEpoch = sessionEpoch;
+    _publishSession();
+  }
+
+  bool Function() captureSession() {
+    final epoch = sessionEpoch;
+    return () => ref.mounted && sessionAdmitted && sessionEpoch == epoch;
+  }
+
+  int _sessionChanges = 0;
+  bool _retired = false;
+  bool get sessionChanging => _retired || _sessionChanges > 0;
+
+  Future<void> retire() async {
+    _retired = true;
+    _sessionEpoch++;
+    invalidatePendingWrites();
+    _publishSession();
+    await _mutationTail;
+  }
+
+  void _publishSession() {
+    if (state.value == null) return;
+    state = AsyncData(
+      _current.copyWith(
+        sessionEpoch: _sessionEpoch,
+        sessionChanging: sessionChanging,
+      ),
+    );
+  }
+
   int _identityChanges = 0;
-  bool get identityChanging => _identityChanges > 0;
+  bool get identityChanging => _retired || _identityChanges > 0;
   Future<void> _mutationTail = Future<void>.value();
   Future<void> _identityTail = Future<void>.value();
   final _identityZone = Object();
 
   Future<T> _mutate<T>(Future<T> Function() action) {
-    final result = _mutationTail.then((_) => action());
+    if (_retired) {
+      return Future.error(StateError('Authentication session has ended'));
+    }
+    final initialized = future;
+    final result = _mutationTail.then((_) async {
+      await initialized;
+      return action();
+    });
     _mutationTail = result.then<void>(
       (_) {},
       onError: (Object _, StackTrace _) {},
@@ -170,9 +255,36 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
     return result;
   }
 
-  Future<T> withIdentityChange<T>(Future<T> Function() action) async {
+  Future<bool> commitForSession(int epoch, Future<void> Function() action) =>
+      _mutate(() async {
+        if (sessionChanging || sessionEpoch != epoch) return false;
+        await action();
+        return !sessionChanging && sessionEpoch == epoch;
+      });
+
+  Future<T> withIdentityChange<T>(
+    Future<T> Function() action, {
+    bool preserveSession = false,
+    int? expectedEpoch,
+  }) async {
+    if (_retired) throw StateError('Authentication session has ended');
+    if (_activeSessionEpoch != null &&
+        _activeSessionEpoch != sessionEpoch &&
+        Zone.current[_identityZone] != this) {
+      throw StateError('Authentication session has ended');
+    }
+    if (expectedEpoch != null &&
+        (expectedEpoch != _serverEpoch ||
+            (identityChanging && Zone.current[_identityZone] != this))) {
+      throw StateError('Authentication session changed');
+    }
     if (Zone.current[_identityZone] == this) return action();
     _identityChanges++;
+    if (!preserveSession) {
+      _sessionChanges++;
+      _sessionEpoch++;
+    }
+    _publishSession();
     final previous = _identityTail;
     final finished = Completer<void>();
     _identityTail = finished.future;
@@ -180,12 +292,36 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
       await previous;
       invalidatePendingWrites();
       await _mutationTail;
-      return await runZoned(action, zoneValues: {_identityZone: this});
+      return await runZoned(() async {
+        final transition = preserveSession
+            ? null
+            : ref.read(authSessionTransitionProvider);
+        return transition == null
+            ? await action()
+            : await transition.run(action);
+      }, zoneValues: {_identityZone: this});
     } finally {
-      invalidatePendingWrites();
       _identityChanges--;
+      if (!preserveSession) {
+        _sessionChanges--;
+        _sessionEpoch++;
+      }
+      invalidatePendingWrites();
+      _publishSession();
       finished.complete();
     }
+  }
+
+  Future<void> replaceCredentials(
+    Future<void> Function(int epoch) action, {
+    int? forEpoch,
+  }) async {
+    if (forEpoch != null &&
+        (forEpoch != _serverEpoch ||
+            (identityChanging && Zone.current[_identityZone] != this))) {
+      return;
+    }
+    await withIdentityChange(() => action(_serverEpoch));
   }
 
   // ---------- Password ----------
@@ -210,21 +346,29 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
   // ---------- Simple Login ----------
 
   Future<void> saveSimpleLoginCookie(String cookieValue, {int? forEpoch}) =>
+      replaceCredentials(
+        (epoch) => _saveSimpleLoginCookie(cookieValue, epoch),
+        forEpoch: forEpoch,
+      );
+
+  Future<void> _saveSimpleLoginCookie(String cookieValue, int forEpoch) =>
       _mutate(() async {
-        if (forEpoch != null && forEpoch != _serverEpoch) return;
+        if (forEpoch != _serverEpoch) return;
         final storage = ref.read(secureStorageProvider);
         await storage.write(key: _kSimpleCookieKey, value: cookieValue);
-        if (forEpoch != null && forEpoch != _serverEpoch) {
+        if (forEpoch != _serverEpoch) {
           await storage.delete(key: _kSimpleCookieKey);
           return;
         }
         state = AsyncData(_current.copyWith(simpleLoginCookie: cookieValue));
       });
 
-  Future<void> clearSimpleLoginCookie() => _mutate(() async {
-    await ref.read(secureStorageProvider).delete(key: _kSimpleCookieKey);
-    state = AsyncData(_current.copyWith(clearSimpleLoginCookie: true));
-  });
+  Future<void> clearSimpleLoginCookie() => replaceCredentials(
+    (_) => _mutate(() async {
+      await ref.read(secureStorageProvider).delete(key: _kSimpleCookieKey);
+      state = AsyncData(_current.copyWith(clearSimpleLoginCookie: true));
+    }),
+  );
 
   // ---------- UI Login ----------
 
@@ -233,20 +377,70 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
   Future<void> saveUiLoginTokens({
     required String accessToken,
     required String refreshToken,
+    AccountBinding? binding,
     int? forEpoch,
+  }) => replaceCredentials(
+    (epoch) => _saveUiLoginTokens(accessToken, refreshToken, epoch, binding),
+    forEpoch: forEpoch,
+  );
+
+  Future<bool> refreshUiLoginTokens({
+    required String accessToken,
+    required String refreshToken,
+    required String originalRefreshToken,
+    required int forEpoch,
   }) => _mutate(() async {
-    if (forEpoch != null && forEpoch != _serverEpoch) return;
+    if (identityChanging ||
+        forEpoch != _serverEpoch ||
+        _current.uiRefreshToken != originalRefreshToken) {
+      return false;
+    }
+    await _writeUiLoginTokens(
+      accessToken,
+      refreshToken,
+      forEpoch,
+      _current.accountBinding,
+    );
+    return forEpoch == _serverEpoch && _current.uiAccessToken == accessToken;
+  });
+
+  Future<void> _saveUiLoginTokens(
+    String accessToken,
+    String refreshToken,
+    int epoch,
+    AccountBinding? binding,
+  ) => _mutate(
+    () => _writeUiLoginTokens(accessToken, refreshToken, epoch, binding),
+  );
+
+  Future<void> _writeUiLoginTokens(
+    String accessToken,
+    String refreshToken,
+    int forEpoch,
+    AccountBinding? binding,
+  ) async {
+    if (forEpoch != _serverEpoch) return;
     final storage = ref.read(secureStorageProvider);
     await storage.write(key: _kUiAccessKey, value: accessToken);
     await storage.write(key: _kUiRefreshKey, value: refreshToken);
-    if (forEpoch != null && forEpoch != _serverEpoch) {
+    if (forEpoch != _serverEpoch) {
       await storage.delete(key: _kUiAccessKey);
       await storage.delete(key: _kUiRefreshKey);
       return;
     }
+    await storage.write(
+      key: _kAccountBindingKey,
+      value: binding?.encode(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+      ),
+    );
+    if (forEpoch != _serverEpoch) return;
     final expiresAt = decodeJwtExp(accessToken);
     state = AsyncData(
       _current.copyWith(
+        accountBinding: binding,
+        clearAccountBinding: binding == null,
         uiAccessToken: accessToken,
         uiRefreshToken: refreshToken,
         uiAccessTokenExpiresAt: expiresAt,
@@ -256,7 +450,7 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
         clearUiAccessTokenExpiresAt: expiresAt == null,
       ),
     );
-  });
+  }
 
   Future<void> updateUiLoginAccessToken(String accessToken, {int? forEpoch}) =>
       _mutate(() async {
@@ -267,6 +461,15 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
           await storage.delete(key: _kUiAccessKey);
           return;
         }
+        final binding = _current.accountBinding;
+        final refresh = _current.uiRefreshToken;
+        await storage.write(
+          key: _kAccountBindingKey,
+          value: binding != null && refresh != null
+              ? binding.encode(accessToken: accessToken, refreshToken: refresh)
+              : null,
+        );
+        if (forEpoch != null && forEpoch != _serverEpoch) return;
         final expiresAt = decodeJwtExp(accessToken);
         state = AsyncData(
           _current.copyWith(
@@ -277,13 +480,19 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
         );
       });
 
-  Future<void> clearUiLoginTokens({int? forEpoch}) => _mutate(() async {
-    if (forEpoch != null && forEpoch != _serverEpoch) return;
+  Future<void> clearUiLoginTokens({int? forEpoch}) => forEpoch == null
+      ? replaceCredentials((epoch) => _clearUiLoginTokens(epoch))
+      : _clearUiLoginTokens(forEpoch);
+
+  Future<void> _clearUiLoginTokens(int forEpoch) => _mutate(() async {
+    if (forEpoch != _serverEpoch) return;
     final storage = ref.read(secureStorageProvider);
     await storage.delete(key: _kUiAccessKey);
     await storage.delete(key: _kUiRefreshKey);
+    await storage.delete(key: _kAccountBindingKey);
     state = AsyncData(
       _current.copyWith(
+        clearAccountBinding: true,
         clearUiAccessToken: true,
         clearUiRefreshToken: true,
         clearUiAccessTokenExpiresAt: true,
@@ -309,20 +518,41 @@ class AuthCredentialsStore extends _$AuthCredentialsStore {
   /// because basic auth has its own existing provider (`credentialsProvider`)
   /// for read access — this method exists solely to give the Logout flow
   /// a way to clear that entry post-migration.
-  Future<void> clearBasicCredentials() => _mutate(
-    () => ref.read(secureStorageProvider).delete(key: _kBasicCredentialsKey),
-  );
+  Future<void> clearBasicCredentials() =>
+      ref.read(credentialsProvider.notifier).set(null);
 
   Future<void> clearAllForServerSwitch() => _mutate(() async {
     _serverEpoch++;
-    state = const AsyncData(AuthCredentialsState.empty());
+    _sessionEpoch++;
+    state = AsyncData(
+      const AuthCredentialsState.empty().copyWith(
+        sessionEpoch: _sessionEpoch,
+        sessionChanging: sessionChanging,
+      ),
+    );
     final storage = ref.read(secureStorageProvider);
     await Future.wait([
       storage.delete(key: _kPasswordKey),
       storage.delete(key: _kSimpleCookieKey),
       storage.delete(key: _kUiAccessKey),
       storage.delete(key: _kUiRefreshKey),
+      storage.delete(key: _kAccountBindingKey),
       storage.delete(key: _kBasicCredentialsKey),
     ]);
+    ref.invalidate(credentialsProvider);
+    await ref.read(credentialsProvider.future);
   });
+}
+
+bool Function() watchAuthSession(Ref ref) {
+  ref.watch(
+    authCredentialsStoreProvider.select(
+      (value) => (
+        value.value?.sessionEpoch ?? 0,
+        value.value?.sessionChanging ?? false,
+      ),
+    ),
+  );
+  final store = ref.read(authCredentialsStoreProvider.notifier);
+  return store.captureSession();
 }

@@ -8,6 +8,8 @@ import 'dart:convert';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import 'notification_state_store.dart';
+
 /// Action ids on a per-series notification (Komikku parity).
 const kNotifActionMarkRead = 'markRead';
 const kNotifActionDownload = 'download';
@@ -16,21 +18,46 @@ const kNotifActionView = 'view';
 /// Payload carried by a notification tap/action, so the (foreground or
 /// headless) handler can route/act without any object graph.
 class NotificationPayload {
-  const NotificationPayload.updates()
-    : mangaId = null,
-      chapterId = null,
-      chapterIds = const [],
-      isUpdateErrors = false;
-  const NotificationPayload.updateErrors()
-    : mangaId = null,
-      chapterId = null,
-      chapterIds = const [],
-      isUpdateErrors = true;
+  const NotificationPayload.updates({
+    this.identityEpoch,
+    this.catalogServerId,
+    this.sessionFingerprint,
+    this.requiresSession = false,
+  }) : mangaId = null,
+       chapterId = null,
+       chapterIds = const [],
+       isUpdateErrors = false;
+
+  const NotificationPayload.updateErrors({
+    this.identityEpoch,
+    this.catalogServerId,
+    this.sessionFingerprint,
+    this.requiresSession = false,
+  }) : mangaId = null,
+       chapterId = null,
+       chapterIds = const [],
+       isUpdateErrors = true;
+
   const NotificationPayload.chapter({
     required this.mangaId,
     required this.chapterId,
     this.chapterIds = const [],
-  }) : isUpdateErrors = false;
+    this.identityEpoch,
+    this.catalogServerId,
+    this.sessionFingerprint,
+  }) : requiresSession = true,
+       isUpdateErrors = false;
+
+  final bool requiresSession;
+  final int? identityEpoch;
+  final String? catalogServerId;
+  final String? sessionFingerprint;
+
+  bool matchesConfig(NotificationWorkerConfig config) =>
+      sessionFingerprint != null &&
+      sessionFingerprint == config.sessionFingerprint &&
+      identityEpoch == config.identityEpoch &&
+      catalogServerId == config.catalogServerId;
 
   final int? mangaId;
 
@@ -45,9 +72,13 @@ class NotificationPayload {
   final bool isUpdateErrors;
 
   String encode() => jsonEncode({
+    if (requiresSession) 'kind': 'chapters',
     if (mangaId != null) 'm': mangaId,
     if (chapterId != null) 'c': chapterId,
     if (chapterIds.isNotEmpty) 'cs': chapterIds,
+    if (identityEpoch != null) 'epoch': identityEpoch,
+    if (catalogServerId != null) 'catalog': catalogServerId,
+    if (sessionFingerprint != null) 'session': sessionFingerprint,
     if (isUpdateErrors) 'e': 1,
   });
 
@@ -55,11 +86,28 @@ class NotificationPayload {
     if (raw == null || raw.isEmpty) return const NotificationPayload.updates();
     try {
       final j = jsonDecode(raw) as Map<String, Object?>;
-      if (j['e'] == 1) return const NotificationPayload.updateErrors();
+      if (j['e'] == 1) {
+        return NotificationPayload.updateErrors(
+          requiresSession: j['kind'] != null,
+          identityEpoch: j['epoch'] as int?,
+          catalogServerId: j['catalog'] as String?,
+          sessionFingerprint: j['session'] as String?,
+        );
+      }
       final m = (j['m'] as num?)?.toInt();
-      if (m == null) return const NotificationPayload.updates();
+      if (m == null) {
+        return NotificationPayload.updates(
+          requiresSession: true,
+          identityEpoch: j['epoch'] as int?,
+          catalogServerId: j['catalog'] as String?,
+          sessionFingerprint: j['session'] as String?,
+        );
+      }
       return NotificationPayload.chapter(
         mangaId: m,
+        identityEpoch: j['epoch'] as int?,
+        catalogServerId: j['catalog'] as String?,
+        sessionFingerprint: j['session'] as String?,
         chapterId: (j['c'] as num?)?.toInt(),
         chapterIds: [
           for (final id in (j['cs'] as List? ?? const [])) (id as num).toInt(),
@@ -207,6 +255,9 @@ class LocalNotificationService {
     required String markReadLabel,
     required String viewLabel,
     required String downloadLabel,
+    int? identityEpoch,
+    String? catalogServerId,
+    String? sessionFingerprint,
   }) async {
     final summaryDetails = AndroidNotificationDetails(
       newChaptersChannelId,
@@ -229,7 +280,12 @@ class LocalNotificationService {
       title: summaryTitle,
       body: summaryText,
       notificationDetails: NotificationDetails(android: summaryDetails),
-      payload: const NotificationPayload.updates().encode(),
+      payload: NotificationPayload.updates(
+        requiresSession: true,
+        identityEpoch: identityEpoch,
+        catalogServerId: catalogServerId,
+        sessionFingerprint: sessionFingerprint,
+      ).encode(),
     );
 
     if (hideContent) return;
@@ -279,6 +335,9 @@ class LocalNotificationService {
         notificationDetails: NotificationDetails(android: details),
         payload: NotificationPayload.chapter(
           mangaId: s.mangaId,
+          identityEpoch: identityEpoch,
+          catalogServerId: catalogServerId,
+          sessionFingerprint: sessionFingerprint,
           chapterId: s.firstChapterId,
           chapterIds: s.chapterIds,
         ).encode(),
@@ -338,13 +397,24 @@ class LocalNotificationService {
     payload: payload,
   );
 
-  Future<void> showLibraryUpdateError(String title, String body) => _showSimple(
+  Future<void> showLibraryUpdateError(
+    String title,
+    String body, {
+    required int identityEpoch,
+    required String? catalogServerId,
+    required String? sessionFingerprint,
+  }) => _showSimple(
     id: _libraryErrorId,
     channelId: libraryErrorChannelId,
     channelName: 'Library update errors',
     title: title,
     body: body,
-    payload: const NotificationPayload.updateErrors().encode(),
+    payload: NotificationPayload.updateErrors(
+      requiresSession: true,
+      identityEpoch: identityEpoch,
+      catalogServerId: catalogServerId,
+      sessionFingerprint: sessionFingerprint,
+    ).encode(),
   );
 
   Future<void> showDownloadError(String title, String body) => _showSimple(

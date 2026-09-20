@@ -15,25 +15,24 @@ ChapterDto _chapter({
   int sourceOrder = 0,
   double number = 0,
   String? scanlator,
-}) =>
-    Fragment$ChapterDto(
-      chapterNumber: number,
-      fetchedAt: '0',
-      id: id,
-      isBookmarked: false,
-      isDownloaded: false,
-      isRead: false,
-      lastPageRead: 0,
-      lastReadAt: '0',
-      mangaId: 1,
-      name: name,
-      pageCount: 0,
-      sourceOrder: sourceOrder,
-      uploadDate: '0',
-      url: '',
-      scanlator: scanlator,
-      meta: const [],
-    );
+}) => Fragment$ChapterDto(
+  chapterNumber: number,
+  fetchedAt: '0',
+  id: id,
+  isBookmarked: false,
+  isDownloaded: false,
+  isRead: false,
+  lastPageRead: 0,
+  lastReadAt: '0',
+  mangaId: 1,
+  name: name,
+  pageCount: 0,
+  sourceOrder: sourceOrder,
+  uploadDate: '0',
+  url: '',
+  scanlator: scanlator,
+  meta: const [],
+);
 
 class _FakeChapterList extends MangaChapterList {
   _FakeChapterList(this.chapters);
@@ -49,8 +48,9 @@ Future<ProviderContainer> _container(List<ChapterDto> chapters) async {
   final c = ProviderContainer(
     overrides: [
       sharedPreferencesProvider.overrideWithValue(prefs),
-      mangaChapterListProvider(mangaId: 1)
-          .overrideWith(() => _FakeChapterList(chapters)),
+      mangaChapterListProvider(
+        mangaId: 1,
+      ).overrideWith(() => _FakeChapterList(chapters)),
     ],
   );
   addTearDown(c.dispose);
@@ -67,10 +67,9 @@ void main() {
 
   test('a chapter absent from the filtered list has NO neighbours', () async {
     final c = await _container(chapters);
-    final pair = c.read(getNextAndPreviousChaptersProvider(
-      mangaId: 1,
-      chapterId: 9999,
-    ));
+    final pair = c.read(
+      getNextAndPreviousChaptersProvider(mangaId: 1, chapterId: 9999),
+    );
     expect(pair, isNotNull);
     // Before the fix, indexWhere == -1 resolved one side to filteredList[0].
     expect(pair!.first, isNull);
@@ -79,10 +78,9 @@ void main() {
 
   test('a middle chapter resolves both neighbours', () async {
     final c = await _container(chapters);
-    final pair = c.read(getNextAndPreviousChaptersProvider(
-      mangaId: 1,
-      chapterId: 2,
-    ));
+    final pair = c.read(
+      getNextAndPreviousChaptersProvider(mangaId: 1, chapterId: 2),
+    );
     expect(pair, isNotNull);
     expect(pair!.first, isNotNull);
     expect(pair.second, isNotNull);
@@ -90,10 +88,9 @@ void main() {
 
   test('an edge chapter resolves exactly one neighbour', () async {
     final c = await _container(chapters);
-    final pair = c.read(getNextAndPreviousChaptersProvider(
-      mangaId: 1,
-      chapterId: 3,
-    ));
+    final pair = c.read(
+      getNextAndPreviousChaptersProvider(mangaId: 1, chapterId: 3),
+    );
     expect(pair, isNotNull);
     // One side present, one absent — never two, never zero for an in-list edge.
     expect([pair!.first, pair.second].where((e) => e != null).length, 1);
@@ -113,18 +110,35 @@ void main() {
 
   test('reader follows the opening scanlator for confident releases', () async {
     final c = await _container([
-      _chapter(id: 1, name: 'Chapter 1', number: 1, sourceOrder: 1,
-          scanlator: 'A'),
-      _chapter(id: 2, name: 'Chapter 1', number: 1, sourceOrder: 2,
-          scanlator: 'B'),
-      _chapter(id: 3, name: 'Chapter 2', number: 2, sourceOrder: 3,
-          scanlator: 'A'),
+      _chapter(
+        id: 1,
+        name: 'Chapter 1',
+        number: 1,
+        sourceOrder: 1,
+        scanlator: 'A',
+      ),
+      _chapter(
+        id: 2,
+        name: 'Chapter 1',
+        number: 1,
+        sourceOrder: 2,
+        scanlator: 'B',
+      ),
+      _chapter(
+        id: 3,
+        name: 'Chapter 2',
+        number: 2,
+        sourceOrder: 3,
+        scanlator: 'A',
+      ),
     ]);
-    final pair = c.read(getNextAndPreviousChaptersProvider(
-      mangaId: 1,
-      chapterId: 1,
-      readerScanlatorGroup: 'A',
-    ));
+    final pair = c.read(
+      getNextAndPreviousChaptersProvider(
+        mangaId: 1,
+        chapterId: 1,
+        readerScanlatorGroup: 'A',
+      ),
+    );
     expect(pair!.first?.id, 3);
   });
 }

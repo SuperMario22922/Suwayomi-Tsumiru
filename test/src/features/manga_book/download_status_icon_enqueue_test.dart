@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:tsumiru/src/features/account/data/account_providers.dart';
 import 'package:tsumiru/src/features/manga_book/data/downloads/downloads_repository.dart';
 import 'package:tsumiru/src/features/manga_book/domain/chapter/chapter_model.dart';
 import 'package:tsumiru/src/features/manga_book/domain/chapter/graphql/__generated__/fragment.graphql.dart';
@@ -16,6 +17,8 @@ import 'package:tsumiru/src/features/manga_book/presentation/downloads/controlle
 import 'package:tsumiru/src/features/manga_book/widgets/download_status_icon.dart';
 import 'package:tsumiru/src/features/offline/data/offline_repository.dart';
 import 'package:tsumiru/src/widgets/custom_circular_progress_indicator.dart';
+
+import '../../../helpers/legacy_account_access.dart';
 
 class _FakeRepo implements DownloadsRepository {
   final enqueue = Completer<void>();
@@ -52,6 +55,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          settledAccountAccessProvider.overrideWithValue(legacyAccountAccess),
           offlineEnabledProvider.overrideWithValue(false),
           downloadsFromIdProvider(1).overrideWithValue(null),
           downloadsRepositoryProvider.overrideWithValue(repo),
@@ -83,9 +87,7 @@ void main() {
     expect(find.byIcon(Icons.cloud_download_outlined), findsNothing);
   });
 
-  testWidgets('a failed request puts the download button back', (
-    tester,
-  ) async {
+  testWidgets('a failed request puts the download button back', (tester) async {
     final repo = await pump(tester);
 
     await tester.tap(find.byIcon(Icons.cloud_download_outlined));
