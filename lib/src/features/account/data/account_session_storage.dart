@@ -1,5 +1,12 @@
+// Copyright (c) 2026 Contributors to the Suwayomi project
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../constants/db_keys.dart';
@@ -8,6 +15,8 @@ import '../../../global_providers/global_providers.dart';
 import '../../auth/data/auth_credentials_store.dart';
 import '../../auth/data/auth_session_transition.dart';
 import '../../offline/data/account_storage_paths.dart';
+import '../../offline/data/account_storage_recovery.dart';
+import '../../offline/data/account_storage_recovery_state.dart';
 import '../../offline/data/background/background_download_controller_shim.dart';
 import '../../offline/data/offline_background_downloads.dart';
 import '../../offline/data/offline_bootstrap.dart';
@@ -24,6 +33,7 @@ typedef AccountStorageOpener =
       String? legacyInstanceId,
       String? ownedRoot,
       String? accountOwner,
+      AccountStorageRecovery? recovery,
     });
 
 final accountStorageOpenerProvider = Provider<AccountStorageOpener>(
@@ -36,6 +46,65 @@ final accountSessionStorageProvider = Provider<AccountSessionStorage>(
 class AccountSessionStorage implements AuthSessionTransition {
   AccountSessionStorage(this._ref);
   final Ref _ref;
+  Future<void>? _recoveryFlight;
+  bool Function()? _recoveryIsCurrent;
+
+  Future<void> recover({Map<int, bool> progressChoices = const {}}) {
+    if (_recoveryFlight != null) return _recoveryFlight!;
+    if (_ref.read(accountStorageRecoveryProvider) == null) {
+      return Future.value();
+    }
+    final current = _ref
+        .read(authCredentialsStoreProvider.notifier)
+        .captureSession();
+    _recoveryIsCurrent = current;
+    final status = _ref.read(accountStorageRecoveryProvider.notifier);
+    final work = Future<void>(() async {
+      if (!_ref.mounted || !current()) return;
+      status.update(
+        const AccountStorageRecoveryState(
+          AccountStorageRecoveryPhase.recovering,
+        ),
+      );
+      try {
+        await restore(
+          recovery: AccountStorageRecovery(
+            progressChoices: progressChoices,
+            isCurrent: () => _ref.mounted && current(),
+            onProgress: (completed) => status.update(
+              AccountStorageRecoveryState(
+                AccountStorageRecoveryPhase.recovering,
+                completed: completed,
+              ),
+            ),
+          ),
+        );
+        if (_ref.mounted && current()) {
+          await _ref.read(backgroundDownloadControllerProvider).rebindStorage();
+        }
+      } catch (error, stack) {
+        debugPrint('Offline storage recovery failed: $error\n$stack');
+        if (current()) {
+          status.update(
+            AccountStorageRecoveryState(
+              AccountStorageRecoveryPhase.failed,
+              conflicts: error is AccountStorageProgressConflict
+                  ? error.conflicts
+                  : const [],
+              details: error is AccountStorageProgressConflict
+                  ? null
+                  : error.toString(),
+            ),
+          );
+        }
+      }
+    });
+    _recoveryFlight = work;
+    return work.whenComplete(() {
+      _recoveryFlight = null;
+      _recoveryIsCurrent = null;
+    });
+  }
 
   @override
   Future<T> run<T>(Future<T> Function() action) async {
@@ -60,7 +129,14 @@ class AccountSessionStorage implements AuthSessionTransition {
           succeeded = true;
           return result;
         } finally {
-          if (previousOwner != _owner() || (succeeded && current == null)) {
+          final interruptedRecovery =
+              current == null &&
+              (_recoveryFlight != null ||
+                  _ref.read(accountStorageRecoveryProvider)?.phase ==
+                      AccountStorageRecoveryPhase.recovering);
+          if (previousOwner != _owner() ||
+              (succeeded && current == null) ||
+              interruptedRecovery) {
             await restore(ownedRoot: background.ownedStorageRoot);
           }
         }
@@ -85,7 +161,17 @@ class AccountSessionStorage implements AuthSessionTransition {
     );
   }
 
-  Future<void> restore({String? ownedRoot}) async {
+  Future<void> restore({
+    String? ownedRoot,
+    AccountStorageRecovery? recovery,
+  }) async {
+    if (recovery == null) {
+      final flight = _recoveryFlight;
+      final recoveryIsCurrent = _recoveryIsCurrent;
+      await flight;
+      if (flight != null && recoveryIsCurrent?.call() == true) return;
+      _ref.read(accountStorageRecoveryProvider.notifier).update(null);
+    }
     final preferences = _ref.read(sharedPreferencesProvider);
     final binding = _ref
         .read(authCredentialsStoreProvider)
@@ -97,7 +183,9 @@ class AccountSessionStorage implements AuthSessionTransition {
     final legacyOwner = preferences.getString(
       DBKeys.offlineCatalogServerId.name,
     );
-    final wasScoped = preferences.getBool(offlineAccountScopedKey) == true;
+    final wasScoped =
+        preferences.getBool(offlineAccountScopedKey) == true ||
+        preferences.getBool(offlineNonAccountScopedKey) == true;
     await _ref
         .read(offlineRuntimeStorageProvider.notifier)
         .replace(
@@ -113,14 +201,45 @@ class AccountSessionStorage implements AuthSessionTransition {
           },
           open: () async {
             if (!canOpen) return null;
-            final storage = await _ref.read(accountStorageOpenerProvider)(
-              accountId: uiLogin ? binding!.catalogId : null,
-              legacyInstanceId: preferences.getString(
-                DBKeys.offlineCatalogServerId.name,
-              ),
-              ownedRoot: ownedRoot,
-              accountOwner: uiLogin ? '${binding!.userId ?? 'legacy'}' : null,
-            );
+            OfflineStorage? storage;
+            try {
+              storage = await _ref.read(accountStorageOpenerProvider)(
+                accountId: uiLogin ? binding!.catalogId : null,
+                legacyInstanceId: preferences.getString(
+                  DBKeys.offlineCatalogServerId.name,
+                ),
+                ownedRoot: ownedRoot,
+                accountOwner: uiLogin ? '${binding!.userId ?? 'legacy'}' : null,
+                recovery: recovery,
+              );
+            } on AccountStorageRecoveryRequired {
+              _ref
+                  .read(accountStorageRecoveryProvider.notifier)
+                  .update(
+                    const AccountStorageRecoveryState(
+                      AccountStorageRecoveryPhase.pending,
+                    ),
+                  );
+              return null;
+            } catch (error, stack) {
+              if (recovery != null) rethrow;
+              debugPrint('Offline storage could not open: $error\n$stack');
+              _ref
+                  .read(accountStorageRecoveryProvider.notifier)
+                  .update(
+                    AccountStorageRecoveryState(
+                      AccountStorageRecoveryPhase.failed,
+                      details: error.toString(),
+                    ),
+                  );
+              return null;
+            }
+            try {
+              recovery?.check();
+            } catch (_) {
+              await storage?.db.close();
+              rethrow;
+            }
             if (storage != null && uiLogin) {
               await preferences.setString(
                 'account.catalogue/${binding!.catalogId}',
@@ -165,8 +284,13 @@ class AccountSessionStorage implements AuthSessionTransition {
             }
             await preferences.setBool(
               offlineAccountScopedKey,
-              storage != null && uiLogin,
+              storage != null && isAccountStoragePath(storage.paths.baseDir),
             );
+            await preferences.setBool(
+              offlineNonAccountScopedKey,
+              storage != null && isNonAccountStoragePath(storage.paths.baseDir),
+            );
+            _ref.read(accountStorageRecoveryProvider.notifier).update(null);
             return storage;
           },
         );

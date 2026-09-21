@@ -7,8 +7,9 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../constants/db_keys.dart';
+import '../../../constants/enum.dart';
 import '../../../global_providers/global_providers.dart';
-import 'account_storage_paths.dart';
+import 'offline_storage_identity.dart';
 
 /// Sendable read signature shared by `Ref.read`, `WidgetRef.read`, and
 /// `ProviderContainer.read` — lets the functions below stay agnostic of which
@@ -17,8 +18,8 @@ typedef OfflineRead = T Function<T>(ProviderListenable<T> provider);
 
 String offlinePreferenceKey(OfflineRead read, DBKeys key) {
   final preferences = read(sharedPreferencesProvider);
-  final catalog = preferences.getString(DBKeys.offlineCatalogServerId.name);
-  return preferences.getBool(offlineAccountScopedKey) == true && catalog != null
+  final catalog = preferences.getString(offlineCatalogServerIdKey(preferences));
+  return read(authTypeKeyProvider) == AuthType.uiLogin && catalog != null
       ? '${key.name}/$catalog'
       : key.name;
 }

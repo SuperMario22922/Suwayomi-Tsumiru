@@ -1,9 +1,217 @@
+// Copyright (c) 2026 Contributors to the Suwayomi project
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
+import 'account_catalogue_recovery_io.dart';
 import 'account_storage_paths.dart';
+import 'account_storage_recovery.dart';
+
+const rootAccountStorageMarker = '.account-root-id';
+
+Future<void> _checkAccountOwner(File owner, String expectedOwner) async {
+  final previous = await owner.readAsString();
+  if (previous == expectedOwner) return;
+  // Suwayomi's account migration assigns legacy data and metadata to user 1.
+  if (previous != 'legacy' || expectedOwner != '1') {
+    throw StateError('Catalogue belongs to a different account');
+  }
+  final pending = File('${owner.path}.pending');
+  final type = await FileSystemEntity.type(pending.path, followLinks: false);
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.file) {
+    throw FileSystemException(
+      'Invalid account owner staging file',
+      pending.path,
+    );
+  }
+  await pending.writeAsString(expectedOwner, flush: true);
+  await pending.rename(owner.path);
+}
+
+Future<String?> rootAccountStorageId(String offlineRoot) async {
+  await _checkAncestors(offlineRoot, offlineRoot);
+  final file = File(p.join(offlineRoot, rootAccountStorageMarker));
+  final type = await FileSystemEntity.type(file.path, followLinks: false);
+  if (type == FileSystemEntityType.notFound) return null;
+  if (type != FileSystemEntityType.file) {
+    throw FileSystemException('Invalid root account marker', file.path);
+  }
+  final id = await file.readAsString();
+  accountStoragePath(offlineRoot, id);
+  return id;
+}
+
+Future<String> resolvedAccountStoragePath(
+  String offlineRoot,
+  String instanceId,
+) async {
+  final target = accountStoragePath(offlineRoot, instanceId);
+  return await rootAccountStorageId(offlineRoot) == instanceId
+      ? offlineRoot
+      : target;
+}
+
+Future<String?> claimRootAccountStorage({
+  required String offlineRoot,
+  required String instanceId,
+  required String? legacyInstanceId,
+  String? accountOwner,
+}) async {
+  final claimed = await rootAccountStorageId(offlineRoot);
+  if (claimed != null && claimed != instanceId) return null;
+  if (claimed == null) {
+    if (legacyInstanceId != instanceId) return null;
+    final target = accountStoragePath(offlineRoot, instanceId);
+    await _checkAncestors(target, offlineRoot);
+    if (await Directory(target).exists()) {
+      final entries = await Directory(target).list(followLinks: false).toList();
+      if (entries.any((entry) => !p.basename(entry.path).startsWith('.bg_'))) {
+        return null;
+      }
+    }
+    final source = File(p.join(offlineRoot, 'catalog.sqlite'));
+    final type = await FileSystemEntity.type(source.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      throw FileSystemException('Invalid legacy catalogue', source.path);
+    }
+  }
+  final owner = File(p.join(offlineRoot, '.account-owner'));
+  final ownerType = await FileSystemEntity.type(owner.path, followLinks: false);
+  if (ownerType != FileSystemEntityType.notFound &&
+      ownerType != FileSystemEntityType.file) {
+    throw FileSystemException('Invalid catalogue owner', owner.path);
+  }
+  if (claimed != null && ownerType == FileSystemEntityType.notFound) {
+    throw StateError('Catalogue owner is unknown');
+  }
+  final expectedOwner = accountOwner ?? 'legacy';
+  for (final name in [
+    rootAccountStorageMarker,
+    accountStorageMarker,
+    accountStorageClearedMarker,
+  ]) {
+    final file = File(p.join(offlineRoot, name));
+    final type = await FileSystemEntity.type(file.path, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.file) {
+      throw FileSystemException('Invalid account storage marker', file.path);
+    }
+    if (type == FileSystemEntityType.file &&
+        await file.readAsString() != instanceId) {
+      throw StateError('Root catalogue belongs to a different account');
+    }
+  }
+  if (ownerType == FileSystemEntityType.file) {
+    await _checkAccountOwner(owner, expectedOwner);
+  }
+  await vetOfflineStorage(path: offlineRoot, offlineRoot: offlineRoot);
+  for (final entry in {
+    '.account-owner': expectedOwner,
+    rootAccountStorageMarker: instanceId,
+    accountStorageMarker: instanceId,
+  }.entries) {
+    final file = File(p.join(offlineRoot, entry.key));
+    if (await file.exists()) continue;
+    final pending = File('${file.path}.pending');
+    final type = await FileSystemEntity.type(pending.path, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.file) {
+      throw FileSystemException(
+        'Invalid account marker staging file',
+        pending.path,
+      );
+    }
+    await pending.writeAsString(entry.value, flush: true);
+    await pending.rename(file.path);
+  }
+  return offlineRoot;
+}
+
+const storageVettedMarker = '.storage-vetted';
+const _storageVetVersion = '1';
+
+Future<void> vetOfflineStorage({
+  required String path,
+  required String offlineRoot,
+  bool force = false,
+  bool writeMarker = true,
+  AccountStorageRecovery? recovery,
+}) async {
+  await _checkAncestors(path, offlineRoot);
+  for (final name in [
+    'catalog.sqlite',
+    'catalog.sqlite-wal',
+    'catalog.sqlite-shm',
+    'catalog.sqlite-journal',
+    '.account-owner',
+  ]) {
+    final file = p.join(path, name);
+    final type = await FileSystemEntity.type(file, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.file) {
+      throw FileSystemException('Invalid offline catalogue', file);
+    }
+  }
+  final marker = File(p.join(path, storageVettedMarker));
+  final type = await FileSystemEntity.type(marker.path, followLinks: false);
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.file) {
+    throw FileSystemException('Invalid storage vet marker', marker.path);
+  }
+  if (!force &&
+      type == FileSystemEntityType.file &&
+      await marker.readAsString() == _storageVetVersion) {
+    return;
+  }
+  final directory = Directory(path);
+  if (await directory.exists()) {
+    if (p.equals(path, offlineRoot)) {
+      await for (final entity in directory.list(followLinks: false)) {
+        final name = p.basename(entity.path);
+        if (name != 'covers' && !RegExp(r'^[0-9]+$').hasMatch(name)) continue;
+        if (entity is! Directory) {
+          throw FileSystemException(
+            'Invalid root storage directory',
+            entity.path,
+          );
+        }
+        await _checkTree(entity, recovery);
+      }
+    } else {
+      await _checkTree(directory, recovery);
+    }
+  }
+  if (writeMarker) {
+    await directory.create(recursive: true);
+    await _writeStorageVetMarker(path, recovery);
+  }
+}
+
+Future<void> _writeStorageVetMarker(
+  String path,
+  AccountStorageRecovery? recovery,
+) async {
+  final marker = File(p.join(path, storageVettedMarker));
+  final pending = File('${marker.path}.pending');
+  final type = await FileSystemEntity.type(pending.path, followLinks: false);
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.file) {
+    throw FileSystemException('Invalid storage vet staging file', pending.path);
+  }
+  recovery?.check();
+  await pending.writeAsString(_storageVetVersion, flush: true);
+  await pending.rename(marker.path);
+}
 
 const accountStorageMarker = '.account-complete';
 const accountStorageClearedMarker = '.account-cleared';
@@ -15,7 +223,7 @@ Future<bool> accountStorageComplete({
   required String offlineRoot,
   required String instanceId,
 }) async {
-  final target = accountStoragePath(offlineRoot, instanceId);
+  final target = await resolvedAccountStoragePath(offlineRoot, instanceId);
   await _checkAncestors(target, offlineRoot);
   final marker = File(p.join(target, accountStorageMarker));
   final type = await FileSystemEntity.type(marker.path, followLinks: false);
@@ -30,7 +238,7 @@ Future<bool> accountStorageCleared({
   required String offlineRoot,
   required String instanceId,
 }) async {
-  final target = accountStoragePath(offlineRoot, instanceId);
+  final target = await resolvedAccountStoragePath(offlineRoot, instanceId);
   await _checkAncestors(target, offlineRoot);
   final marker = File(p.join(target, accountStorageClearedMarker));
   final type = await FileSystemEntity.type(marker.path, followLinks: false);
@@ -50,21 +258,60 @@ Future<String> prepareAccountStorage({
   String? accountOwner,
   AccountFileCopy? copyFile,
   AccountEntityRename? renameEntity,
+  AccountStorageRecovery? recovery,
 }) async {
+  final worker = _AccountFileWorker(recovery);
+  try {
+    return await _prepareAccountStorage(
+      offlineRoot: offlineRoot,
+      instanceId: instanceId,
+      legacyInstanceId: legacyInstanceId,
+      accountOwner: accountOwner,
+      copyFile: copyFile,
+      renameEntity: renameEntity,
+      recovery: recovery,
+      worker: worker,
+    );
+  } finally {
+    await worker.close();
+  }
+}
+
+Future<String> _prepareAccountStorage({
+  required String offlineRoot,
+  required String instanceId,
+  required _AccountFileWorker worker,
+  String? legacyInstanceId,
+  String? accountOwner,
+  AccountFileCopy? copyFile,
+  AccountEntityRename? renameEntity,
+  AccountStorageRecovery? recovery,
+}) async {
+  final claimed = await rootAccountStorageId(offlineRoot);
+  if (claimed == instanceId) {
+    return (await claimRootAccountStorage(
+      offlineRoot: offlineRoot,
+      instanceId: instanceId,
+      legacyInstanceId: legacyInstanceId,
+      accountOwner: accountOwner,
+    ))!;
+  }
   final target = Directory(accountStoragePath(offlineRoot, instanceId));
   await _checkAncestors(target.path, offlineRoot);
   await target.create(recursive: true);
-  await _checkTree(target);
   final cleared = await accountStorageCleared(
     offlineRoot: offlineRoot,
     instanceId: instanceId,
   );
   if (accountOwner != null) {
     final owner = File(p.join(target.path, '.account-owner'));
+    final type = await FileSystemEntity.type(owner.path, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.file) {
+      throw FileSystemException('Invalid catalogue owner', owner.path);
+    }
     if (await owner.exists()) {
-      if (await owner.readAsString() != accountOwner) {
-        throw StateError('Catalogue belongs to a different account');
-      }
+      await _checkAccountOwner(owner, accountOwner);
     } else {
       if (await accountStorageComplete(
         offlineRoot: offlineRoot,
@@ -75,12 +322,24 @@ Future<String> prepareAccountStorage({
       await owner.writeAsString(accountOwner, flush: true);
     }
   }
-  if (await accountStorageComplete(
+  final complete = await accountStorageComplete(
     offlineRoot: offlineRoot,
     instanceId: instanceId,
-  )) {
-    return target.path;
-  }
+  );
+  final cleanup =
+      recovery != null &&
+      legacyInstanceId == instanceId &&
+      claimed == null &&
+      !cleared &&
+      await File(p.join(offlineRoot, 'catalog.sqlite')).exists();
+  await vetOfflineStorage(
+    path: target.path,
+    offlineRoot: offlineRoot,
+    force: !complete || cleanup,
+    writeMarker: complete && !cleanup,
+    recovery: recovery,
+  );
+  if (complete && !cleanup) return target.path;
   final sourceDb = File(p.join(offlineRoot, 'catalog.sqlite'));
   final sourceType = await FileSystemEntity.type(
     sourceDb.path,
@@ -88,6 +347,7 @@ Future<String> prepareAccountStorage({
   );
   final canResume =
       !cleared &&
+      claimed == null &&
       legacyInstanceId == instanceId &&
       sourceType != FileSystemEntityType.notFound;
   final hasAccountData = await target
@@ -107,6 +367,8 @@ Future<String> prepareAccountStorage({
           '.bg_permission.yield',
           '.account-owner',
           accountStorageClearedMarker,
+          storageVettedMarker,
+          '$storageVettedMarker.pending',
         }.contains(p.basename(entry.path)),
       );
   if (!canResume && hasAccountData) {
@@ -126,11 +388,65 @@ Future<String> prepareAccountStorage({
         wal.path,
       );
     }
-    await _copyVerified(
-      sourceDb,
-      File(p.join(target.path, 'catalog.sqlite')),
-      copyFile,
+    final destinationDb = File(p.join(target.path, 'catalog.sqlite'));
+    if (await destinationDb.exists() &&
+        !_catalogueIsValid(destinationDb.path) &&
+        await worker.run(sourceDb.path, destinationDb.path, 'prefix')) {
+      // A valid catalogue or a nonmatching file may contain account changes.
+      // Only an incomplete byte-for-byte copy can be replaced from the source.
+      for (final suffix in ['-wal', '-shm', '-journal']) {
+        final sidecar = File('${destinationDb.path}$suffix');
+        if (await sidecar.exists() && await sidecar.length() != 0) {
+          throw FileSystemException(
+            'Partial catalogue has recovery data',
+            sidecar.path,
+          );
+        }
+      }
+      final pending = File('${destinationDb.path}.copying');
+      await _copyVerified(sourceDb, pending, copyFile, recovery, worker);
+      if (!_catalogueIsValid(pending.path)) {
+        throw FileSystemException(
+          'Legacy catalogue failed integrity check',
+          sourceDb.path,
+        );
+      }
+      final backup = File('${destinationDb.path}.truncated-backup');
+      final backupType = await FileSystemEntity.type(
+        backup.path,
+        followLinks: false,
+      );
+      if (backupType == FileSystemEntityType.notFound) {
+        await destinationDb.rename(backup.path);
+      } else if (backupType == FileSystemEntityType.file) {
+        await worker.run(destinationDb.path, backup.path, 'verify');
+      } else {
+        throw FileSystemException(
+          'Invalid truncated catalogue backup',
+          backup.path,
+        );
+      }
+      recovery?.check();
+      await pending.rename(destinationDb.path);
+      await backup.delete();
+    }
+    if (!await destinationDb.exists()) {
+      final pending = File('${destinationDb.path}.copying');
+      await _copyVerified(sourceDb, pending, copyFile, recovery, worker);
+      await pending.rename(destinationDb.path);
+    }
+    final backup = File('${destinationDb.path}.truncated-backup');
+    if (await backup.exists() &&
+        _catalogueIsValid(destinationDb.path) &&
+        await worker.run(sourceDb.path, backup.path, 'prefix')) {
+      await backup.delete();
+    }
+    await reconcileAccountCatalogues(
+      sourceDb.path,
+      destinationDb.path,
+      choices: recovery?.progressChoices ?? const {},
     );
+    recovery?.check();
     await for (final entity in Directory(
       offlineRoot,
     ).list(followLinks: false)) {
@@ -148,6 +464,8 @@ Future<String> prepareAccountStorage({
         copyFile,
         renameEntity,
         offlineRoot,
+        recovery,
+        worker,
       );
     }
     final database = sqlite3.open(
@@ -166,8 +484,24 @@ Future<String> prepareAccountStorage({
       database.close();
     }
   }
+  await _writeStorageVetMarker(target.path, recovery);
   final marker = File(p.join(target.path, accountStorageMarker));
+  recovery?.check();
   await marker.writeAsString(instanceId, flush: true);
+  if (canResume && recovery != null) {
+    for (final suffix in ['', '-wal', '-shm', '-journal']) {
+      final file = File('${sourceDb.path}$suffix');
+      final type = await FileSystemEntity.type(file.path, followLinks: false);
+      if (type == FileSystemEntityType.file) {
+        await file.delete();
+      } else if (type != FileSystemEntityType.notFound) {
+        throw FileSystemException(
+          'Invalid legacy catalogue sidecar',
+          file.path,
+        );
+      }
+    }
+  }
   return target.path;
 }
 
@@ -189,22 +523,30 @@ Future<void> _checkAncestors(String path, String root) async {
   }
 }
 
-Future<void> _checkLegacyTree(Directory directory) async {
+Future<void> _checkLegacyTree(
+  Directory directory,
+  AccountStorageRecovery? recovery,
+) async {
   await for (final entity in directory.list(
     recursive: true,
     followLinks: false,
   )) {
+    recovery?.check();
     if (entity is! Directory && entity is! File) {
       throw FileSystemException('Legacy storage contains a link', entity.path);
     }
   }
 }
 
-Future<void> _checkTree(Directory directory) async {
+Future<void> _checkTree(
+  Directory directory, [
+  AccountStorageRecovery? recovery,
+]) async {
   await for (final entity in directory.list(
     recursive: true,
     followLinks: false,
   )) {
+    recovery?.check();
     if (entity is! Directory && entity is! File) {
       throw FileSystemException('Account storage contains a link', entity.path);
     }
@@ -223,12 +565,18 @@ Future<void> _moveDirectory(
   AccountFileCopy? copyFile,
   AccountEntityRename? renameEntity,
   String offlineRoot,
+  AccountStorageRecovery? recovery,
+  _AccountFileWorker worker,
 ) async {
+  recovery?.check();
   await _checkAncestors(destination.path, offlineRoot);
   // A rename adopts the subtree wholesale, so it has to be vetted first. The
   // per-entry walk below only sees what it copies.
-  await _checkLegacyTree(source);
-  if (await _renamed(source, destination.path, renameEntity)) return;
+  await _checkLegacyTree(source, recovery);
+  if (await _renamed(source, destination.path, renameEntity)) {
+    recovery?.completed();
+    return;
+  }
   await destination.create(recursive: true);
   await for (final entity in source.list(followLinks: false)) {
     final name = p.basename(entity.path);
@@ -243,9 +591,20 @@ Future<void> _moveDirectory(
         copyFile,
         renameEntity,
         offlineRoot,
+        recovery,
+        worker,
       );
     } else {
-      await _moveFile(entity as File, File(target), copyFile, renameEntity);
+      recovery?.check();
+      await _moveFile(
+        entity as File,
+        File(target),
+        copyFile,
+        renameEntity,
+        recovery,
+        worker,
+      );
+      recovery?.completed();
     }
   }
 }
@@ -255,6 +614,8 @@ Future<void> _moveFile(
   File destination,
   AccountFileCopy? copyFile,
   AccountEntityRename? renameEntity,
+  AccountStorageRecovery? recovery,
+  _AccountFileWorker worker,
 ) async {
   final type = await FileSystemEntity.type(
     destination.path,
@@ -268,7 +629,24 @@ Future<void> _moveFile(
       await _renamed(source, destination.path, renameEntity)) {
     return;
   }
-  await _copyVerified(source, destination, copyFile);
+  if (type == FileSystemEntityType.file) {
+    if (await worker.run(source.path, destination.path, 'prefix')) {
+      final pending = File('${destination.path}.copying');
+      await _copyVerified(source, pending, copyFile, recovery, worker);
+      recovery?.check();
+      await pending.rename(destination.path);
+    } else {
+      await worker.run(source.path, destination.path, 'verify');
+    }
+    recovery?.check();
+    await source.delete();
+    return;
+  }
+  final pending = File('${destination.path}.copying');
+  await _copyVerified(source, pending, copyFile, recovery, worker);
+  await pending.rename(destination.path);
+  recovery?.check();
+  await source.delete();
 }
 
 /// True when [source] now lives at [destination]. A rename onto an occupied
@@ -298,6 +676,8 @@ Future<void> _copyVerified(
   File source,
   File destination,
   AccountFileCopy? copyFile,
+  AccountStorageRecovery? recovery,
+  _AccountFileWorker worker,
 ) async {
   final type = await FileSystemEntity.type(
     destination.path,
@@ -307,34 +687,213 @@ Future<void> _copyVerified(
       type != FileSystemEntityType.file) {
     throw FileSystemException('Invalid account storage file', destination.path);
   }
-  if (copyFile == null) {
-    await source.copy(destination.path);
-  } else {
+  if (copyFile != null) {
     await copyFile(source, destination);
+    recovery?.check();
   }
-  final input = await source.open();
-  final output = await destination.open(mode: FileMode.append);
+  await worker.run(
+    source.path,
+    destination.path,
+    copyFile == null ? 'copy' : 'verify',
+  );
+}
+
+bool _catalogueIsValid(String path) {
+  if (File(path).lengthSync() == 0) return false;
+  Database? database;
   try {
-    if (await input.length() != await output.length()) {
-      throw FileSystemException(
-        'Account copy length differs',
-        destination.path,
-      );
+    database = sqlite3.open(path, mode: OpenMode.readOnly);
+    final rows = database.select('PRAGMA quick_check');
+    return rows.length == 1 && rows.single.values.single == 'ok';
+  } on SqliteException {
+    return false;
+  } finally {
+    database?.close();
+  }
+}
+
+/// Requests are sequential, so one worker serves the whole migration.
+class _AccountFileWorker {
+  _AccountFileWorker(this.recovery);
+
+  final AccountStorageRecovery? recovery;
+  final ReceivePort _messages = ReceivePort();
+  final Completer<SendPort> _ready = Completer<SendPort>();
+  StreamSubscription<dynamic>? _subscription;
+  Isolate? _isolate;
+  Completer<bool>? _result;
+
+  Object? _failure;
+  StackTrace? _failureStack;
+
+  Future<bool> run(String source, String destination, String operation) async {
+    recovery?.check();
+    if (_subscription == null) {
+      _subscription = _messages.listen((message) {
+        if (message is SendPort) {
+          _ready.complete(message);
+        } else if (message is bool) {
+          _result?.complete(message);
+        } else {
+          final error = message is List
+              ? message[0] as Object
+              : StateError('Account file recovery stopped');
+          final stack = message is List && message.length > 1
+              ? message[1] is StackTrace
+                    ? message[1] as StackTrace
+                    : StackTrace.fromString('${message[1]}')
+              : StackTrace.current;
+          _failure = error;
+          _failureStack = stack;
+          if (!_ready.isCompleted) _ready.completeError(error, stack);
+          if (_result != null && !_result!.isCompleted) {
+            _result!.completeError(error, stack);
+          }
+        }
+      });
+      await Future.wait<void>([
+        Isolate.spawn(
+          _fileWorker,
+          _messages.sendPort,
+          onExit: _messages.sendPort,
+          onError: _messages.sendPort,
+        ).then((isolate) => _isolate = isolate),
+        _ready.future.then((_) {}),
+      ], eagerError: true);
     }
-    await output.setPosition(0);
-    while (true) {
-      final before = await input.read(65536);
-      if (before.isEmpty) break;
-      final after = await output.read(before.length);
-      for (var index = 0; index < before.length; index++) {
-        if (index >= after.length || before[index] != after[index]) {
-          throw FileSystemException('Account copy differs', destination.path);
+    if (_failure != null) Error.throwWithStackTrace(_failure!, _failureStack!);
+    recovery?.check();
+    final control = await _ready.future;
+    _result = Completer<bool>();
+    control.send((source, destination, operation));
+    final cancellation = recovery == null
+        ? null
+        : Timer.periodic(const Duration(milliseconds: 20), (_) {
+            if (!recovery!.isCurrent()) control.send(null);
+          });
+    try {
+      final result = await _result!.future;
+      recovery?.check();
+      return result;
+    } finally {
+      cancellation?.cancel();
+      _result = null;
+    }
+  }
+
+  Future<void> close() async {
+    _isolate?.kill(priority: Isolate.immediate);
+    await _subscription?.cancel();
+    _messages.close();
+  }
+}
+
+void _fileWorker(SendPort result) {
+  final commands = ReceivePort();
+  var cancelled = false;
+  void check() {
+    if (cancelled) throw StateError('Account storage recovery cancelled');
+  }
+
+  commands.listen((message) async {
+    if (message == null) {
+      cancelled = true;
+      return;
+    }
+    final (source, destination, operation) =
+        message as (String, String, String);
+    try {
+      check();
+      if (operation == 'prefix') {
+        result.send(await _isTruncatedCopy(source, destination, check));
+        return;
+      }
+      if (operation == 'copy') {
+        final input = await File(source).open();
+        try {
+          final output = await File(destination).open(mode: FileMode.write);
+          try {
+            while (true) {
+              check();
+              final bytes = await input.read(65536);
+              if (bytes.isEmpty) break;
+              await output.writeFrom(bytes);
+            }
+            await output.flush();
+          } finally {
+            await output.close();
+          }
+        } finally {
+          await input.close();
         }
       }
+      check();
+      await _verifyFileCopy(source, destination, check);
+      result.send(true);
+    } catch (error, stack) {
+      result.send([error, stack]);
     }
-    await output.flush();
+  });
+  result.send(commands.sendPort);
+}
+
+Future<bool> _isTruncatedCopy(
+  String source,
+  String destination,
+  void Function() check,
+) async {
+  final input = await File(source).open();
+  try {
+    final output = await File(destination).open();
+    try {
+      if (await output.length() >= await input.length()) return false;
+      while (true) {
+        check();
+        final after = await output.read(65536);
+        if (after.isEmpty) return true;
+        final before = await input.read(after.length);
+        for (var i = 0; i < after.length; i++) {
+          if (i >= before.length || before[i] != after[i]) return false;
+        }
+      }
+    } finally {
+      await output.close();
+    }
   } finally {
     await input.close();
-    await output.close();
+  }
+}
+
+Future<void> _verifyFileCopy(
+  String sourcePath,
+  String destinationPath,
+  void Function() check,
+) async {
+  final input = await File(sourcePath).open();
+  try {
+    final output = await File(destinationPath).open();
+    try {
+      if (await input.length() != await output.length()) {
+        throw FileSystemException(
+          'Account copy length differs',
+          destinationPath,
+        );
+      }
+      while (true) {
+        check();
+        final before = await input.read(65536);
+        if (before.isEmpty) break;
+        final after = await output.read(before.length);
+        for (var index = 0; index < before.length; index++) {
+          if (index >= after.length || before[index] != after[index]) {
+            throw FileSystemException('Account copy differs', destinationPath);
+          }
+        }
+      }
+    } finally {
+      await output.close();
+    }
+  } finally {
+    await input.close();
   }
 }

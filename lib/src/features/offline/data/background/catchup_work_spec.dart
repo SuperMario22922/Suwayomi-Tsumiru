@@ -13,6 +13,7 @@ import '../../../notifications/data/notification_state_store.dart';
 import '../../../notifications/domain/new_chapter_detection.dart';
 import '../account_storage_paths.dart';
 import '../offline_server_identity.dart';
+import '../offline_storage_identity.dart';
 import '../offline_types.dart';
 import 'background_schedule.dart';
 
@@ -128,6 +129,7 @@ class CatchupWorkSpec {
   const CatchupWorkSpec({
     required this.serverId,
     this.accountScoped = false,
+    this.nonAccountScoped = false,
     required this.wifiOnly,
     required this.storageCapEnabled,
     required this.storageCapBytes,
@@ -138,9 +140,13 @@ class CatchupWorkSpec {
 
   final String serverId;
   final bool accountScoped;
+  final bool nonAccountScoped;
 
-  String storagePath(String offlineRoot) =>
-      accountScoped ? accountStoragePath(offlineRoot, serverId) : offlineRoot;
+  String storagePath(String offlineRoot) => nonAccountScoped
+      ? nonAccountStoragePath(offlineRoot)
+      : accountScoped
+      ? accountStoragePath(offlineRoot, serverId)
+      : offlineRoot;
   final bool wifiOnly;
   final bool storageCapEnabled;
   final int storageCapBytes;
@@ -155,6 +161,7 @@ class CatchupWorkSpec {
   Map<String, Object?> toJson() => {
     'serverId': serverId,
     'accountScoped': accountScoped,
+    'nonAccountScoped': nonAccountScoped,
     'wifiOnly': wifiOnly,
     'storageCapEnabled': storageCapEnabled,
     'storageCapBytes': storageCapBytes,
@@ -166,6 +173,7 @@ class CatchupWorkSpec {
   factory CatchupWorkSpec.fromJson(Map<String, Object?> j) => CatchupWorkSpec(
     serverId: j['serverId'] as String,
     accountScoped: j['accountScoped'] as bool? ?? false,
+    nonAccountScoped: j['nonAccountScoped'] as bool? ?? false,
     wifiOnly: (j['wifiOnly'] as bool?) ?? true,
     storageCapEnabled: (j['storageCapEnabled'] as bool?) ?? false,
     storageCapBytes: (j['storageCapBytes'] as num?)?.toInt() ?? 0,
@@ -387,7 +395,7 @@ class CatchupStateStore {
   /// unrelated notification cursor) — the executor must not cross-check the
   /// spec against that instead, or the spec looks perpetually stale.
   String? get catalogServerId =>
-      _prefs.getString(DBKeys.offlineCatalogServerId.name);
+      _prefs.getString(offlineCatalogServerIdKey(_prefs));
 
   static const identityChangingKey = 'offline_background_identity_changing';
   bool get identityChanging => _prefs.getBool(identityChangingKey) ?? false;
@@ -421,8 +429,8 @@ class CatchupStateStore {
         config.identityEpoch == identityEpoch &&
         catalogServerId != null &&
         catalogServerId == config.catalogServerId &&
-        _prefs.getString(DBKeys.offlineLastServerId.name) == catalogServerId &&
-        _prefs.getString(DBKeys.offlineLastServerAddress.name) == address &&
+        _prefs.getString(offlineLastServerIdKey(_prefs)) == catalogServerId &&
+        _prefs.getString(offlineLastServerAddressKey(_prefs)) == address &&
         config.verifiedAddress == address;
   }
 

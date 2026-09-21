@@ -1,3 +1,9 @@
+// Copyright (c) 2026 Contributors to the Suwayomi project
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -48,9 +54,32 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
 
   Future<List<FileSystemEntity>> _tree(String path) async {
     final entries = <FileSystemEntity>[];
-    await for (final entry in Directory(
-      path,
-    ).list(recursive: true, followLinks: false)) {
+    Stream<FileSystemEntity> entriesAt(String directory) async* {
+      await for (final entry in Directory(directory).list(followLinks: false)) {
+        final name = p.basename(entry.path);
+        if (p.equals(path, root) &&
+            p.equals(directory, root) &&
+            name != 'covers' &&
+            !RegExp(r'^[0-9]+$').hasMatch(name) &&
+            !{
+              'catalog.sqlite',
+              'catalog.sqlite-wal',
+              'catalog.sqlite-journal',
+              'catalog.sqlite-shm',
+              accountStorageMarker,
+              storageVettedMarker,
+              accountStorageClearedMarker,
+              '.account-owner',
+              rootAccountStorageMarker,
+            }.contains(name)) {
+          continue;
+        }
+        yield entry;
+        if (entry is Directory) yield* entriesAt(entry.path);
+      }
+    }
+
+    await for (final entry in entriesAt(path)) {
       if (entry is! File && entry is! Directory) {
         throw FileSystemException('Invalid catalogue entry', entry.path);
       }
@@ -68,7 +97,9 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
     if (!await accountStorageComplete(offlineRoot: root, instanceId: id)) {
       throw StateError('Catalogue is incomplete');
     }
-    final file = File(p.join(accountStoragePath(root, id), '.account-owner'));
+    final file = File(
+      p.join(await resolvedAccountStoragePath(root, id), '.account-owner'),
+    );
     if (await FileSystemEntity.type(file.path, followLinks: false) !=
         FileSystemEntityType.file) {
       throw FileSystemException('Invalid catalogue owner', file.path);
@@ -92,17 +123,29 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
   @override
   Future<List<AccountCatalogue>> list({String? activePath}) async {
     final accounts = p.join(root, 'accounts');
-    if (!await _directory(root) || !await _directory(accounts)) return [];
+    if (!await _directory(root)) return [];
+    final rootId = await rootAccountStorageId(root);
+    final candidates = <FileSystemEntity>[
+      if (rootId != null) Directory(root),
+      if (await _directory(accounts))
+        ...await Directory(accounts).list(followLinks: false).toList(),
+    ];
     final result = <AccountCatalogue>[];
-    await for (final directory in Directory(
-      accounts,
-    ).list(followLinks: false)) {
+    for (final directory in candidates) {
       if (directory is! Directory ||
           (activePath != null && p.equals(directory.path, activePath))) {
         continue;
       }
       try {
-        final id = p.basename(directory.path);
+        final id = p.equals(directory.path, root)
+            ? rootId!
+            : p.basename(directory.path);
+        if (!p.equals(
+          directory.path,
+          await resolvedAccountStoragePath(root, id),
+        )) {
+          continue;
+        }
         final owner = await _owner(id);
         final entries = await _tree(directory.path);
         var bytes = 0;
@@ -137,6 +180,47 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
         continue;
       }
     }
+    final nonAccount = nonAccountStoragePath(root);
+    if (activePath == null || !p.equals(nonAccount, activePath)) {
+      try {
+        if (await _directory(nonAccount)) {
+          final entries = await _tree(nonAccount);
+          final files = entries.whereType<File>().where(
+            (file) =>
+                p.dirname(file.path) != nonAccount ||
+                !_locks.contains(p.basename(file.path)),
+          );
+          var bytes = 0;
+          for (final file in files) {
+            bytes += await file.length();
+          }
+          if (files.isNotEmpty) {
+            final id =
+                preferences.getString(offlineNonAccountCatalogServerIdKey) ??
+                'non-account';
+            final verifiedId = preferences.getString(
+              offlineNonAccountLastServerIdKey,
+            );
+            result.add(
+              AccountCatalogue(
+                id: id,
+                owner: 'non-account',
+                path: nonAccount,
+                bytes: bytes,
+                isNonAccount: true,
+                address: verifiedId == id
+                    ? preferences.getString(
+                        offlineNonAccountLastServerAddressKey,
+                      )
+                    : null,
+              ),
+            );
+          }
+        }
+      } on Object {
+        // An invalid store cannot be safely removed.
+      }
+    }
     result.sort((a, b) => a.id.compareTo(b.id));
     return result;
   }
@@ -146,11 +230,20 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
     AccountCatalogue catalogue, {
     required bool Function() canRemove,
   }) async {
-    final target = accountStoragePath(root, catalogue.id);
+    final target = catalogue.isNonAccount
+        ? nonAccountStoragePath(root)
+        : await resolvedAccountStoragePath(root, catalogue.id);
     if (!p.equals(target, catalogue.path) || !canRemove()) {
       throw StateError('Catalogue is active or the session changed');
     }
-    if (await _owner(catalogue.id) != catalogue.owner) {
+    if (!await _directory(root) || !await _directory(target)) {
+      throw StateError('Catalogue directory changed');
+    }
+    if (catalogue.isNonAccount
+        ? (preferences.getString(offlineNonAccountCatalogServerIdKey) ??
+                  'non-account') !=
+              catalogue.id
+        : await _owner(catalogue.id) != catalogue.owner) {
       throw StateError('Catalogue owner changed');
     }
     await _tree(target);
@@ -164,23 +257,43 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
     }
     final held = <BackgroundDownloadLock>[];
     try {
-      for (final path in [root, target]) {
+      for (final path in {root, target}) {
         final lock = BackgroundDownloadLock(File(p.join(path, '.bg_lock')));
         if (!await lock.acquire('remove-catalogue')) {
           throw StateError('Catalogue is in use');
         }
         held.add(lock);
       }
-      if (!canRemove() || await _owner(catalogue.id) != catalogue.owner) {
+      if (!canRemove() ||
+          !await _directory(root) ||
+          !await _directory(target) ||
+          (catalogue.isNonAccount
+              ? (preferences.getString(offlineNonAccountCatalogServerIdKey) ??
+                        'non-account') !=
+                    catalogue.id
+              : await _owner(catalogue.id) != catalogue.owner)) {
         throw StateError('Catalogue is active or the session changed');
       }
       final entries = await _tree(target);
       if (!canRemove()) throw StateError('Authentication session changed');
-      await accountStorageCleared(offlineRoot: root, instanceId: catalogue.id);
-      await File(
-        p.join(target, accountStorageClearedMarker),
-      ).writeAsString(catalogue.id, flush: true);
-      final markers = {accountStorageMarker, '.account-owner'};
+      if (!catalogue.isNonAccount) {
+        await accountStorageCleared(
+          offlineRoot: root,
+          instanceId: catalogue.id,
+        );
+        await File(
+          p.join(target, accountStorageClearedMarker),
+        ).writeAsString(catalogue.id, flush: true);
+      }
+      final rootCatalogue = p.equals(target, root);
+      final markers = {
+        if (!catalogue.isNonAccount) accountStorageMarker,
+        if (!catalogue.isNonAccount && !rootCatalogue) '.account-owner',
+      };
+      final retained = {
+        rootAccountStorageMarker,
+        if (rootCatalogue) '.account-owner',
+      };
       final data =
           entries
               .where(
@@ -188,6 +301,7 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
                     p.dirname(entry.path) != target ||
                     (!_locks.contains(p.basename(entry.path)) &&
                         !markers.contains(p.basename(entry.path)) &&
+                        !retained.contains(p.basename(entry.path)) &&
                         p.basename(entry.path) != accountStorageClearedMarker),
               )
               .toList()
@@ -206,17 +320,23 @@ class NativeAccountCatalogueRepository implements AccountCatalogueRepository {
       for (final name in markers) {
         await File(p.join(target, name)).delete();
       }
-      final keys = {
-        'account.catalogue/${catalogue.id}',
-        'account.current/${catalogue.id}',
-        '${DBKeys.offlineCatchUpWatermark.name}/${catalogue.id}',
-        '${DBKeys.offlineCatchUpAwaitingPull.name}/${catalogue.id}',
-        'offlinePhantomCleanupDone/${catalogue.id}',
-        'offline.downloadPermission/${catalogue.id}',
-        'catchup_ledger/${catalogue.id}',
-        if (_metadata('catchup_ledger')['serverId'] == catalogue.id)
-          'catchup_ledger',
-      };
+      final keys = catalogue.isNonAccount
+          ? {
+              offlineNonAccountCatalogServerIdKey,
+              offlineNonAccountLastServerIdKey,
+              offlineNonAccountLastServerAddressKey,
+            }
+          : {
+              'account.catalogue/${catalogue.id}',
+              'account.current/${catalogue.id}',
+              '${DBKeys.offlineCatchUpWatermark.name}/${catalogue.id}',
+              '${DBKeys.offlineCatchUpAwaitingPull.name}/${catalogue.id}',
+              'offlinePhantomCleanupDone/${catalogue.id}',
+              'offline.downloadPermission/${catalogue.id}',
+              'catchup_ledger/${catalogue.id}',
+              if (_metadata('catchup_ledger')['serverId'] == catalogue.id)
+                'catchup_ledger',
+            };
       for (final key in preferences.getKeys().intersection(keys)) {
         if (!await preferences.remove(key)) {
           throw StateError('Could not remove catalogue metadata');
