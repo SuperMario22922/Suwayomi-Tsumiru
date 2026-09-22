@@ -27,7 +27,9 @@ String longStringFromJson(dynamic data) {
 }
 
 dynamic cursorToJson(int data) {
-  return data;
+  // Suwayomi's Cursor scalar is transported as a GraphQL string. Keeping it
+  // numeric here makes every follow-up page request fail server validation.
+  return data.toString();
 }
 
 int cursorFromJson(dynamic data) {
