@@ -88,7 +88,7 @@ void main() {
       await container.pump();
     }
     expect(states, isEmpty);
-    expect(link.cursors, [null, 3]);
+    expect(link.cursors, [null, '3']);
     pending = Completer<AccountAccess>();
     container.invalidate(accountAccessProvider);
     pending.complete(AccountAccess(capability: AccountCapability.unknown));
@@ -206,7 +206,7 @@ void main() {
       GraphQLClient(link: link, cache: GraphQLCache()),
     );
     expect(await repository.getDefaultCategoryId(), 81);
-    expect(link.cursors, [null, 3]);
+    expect(link.cursors, [null, '3']);
   });
   test('nonzero default groups explicit and uncategorized membership once', () {
     MangaProxy manga(int id, List<int> categories) => (

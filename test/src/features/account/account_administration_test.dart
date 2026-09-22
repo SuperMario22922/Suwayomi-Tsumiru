@@ -66,7 +66,7 @@ void main() {
       await repository.users(first: 25, after: 42, search: ' Reader ');
       expect(link.requests.single.variables, {
         'first': 25,
-        'after': 42,
+        'after': '42',
         'filter': {
           'username': {'includesInsensitive': 'Reader'},
         },

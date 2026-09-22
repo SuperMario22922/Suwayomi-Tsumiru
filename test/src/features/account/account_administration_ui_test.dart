@@ -118,7 +118,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('second-reader'), findsOneWidget);
     expect(find.text('Next'), findsNothing);
-    expect(link.requests.last.variables['after'], 25);
+    expect(link.requests.last.variables['after'], '25');
     await tester.tap(find.text('Previous page'));
     await tester.pumpAndSettle();
     expect(find.text('first-reader'), findsOneWidget);
