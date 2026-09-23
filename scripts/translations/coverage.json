@@ -1,0 +1,232 @@
+{
+  "baseline": "fe452d18",
+  "total": 1190,
+  "before": {
+    "ar": 237,
+    "de": 38,
+    "es": 203,
+    "fil": 0,
+    "fr": 203,
+    "gan": 0,
+    "gan_Hant": 0,
+    "id": 92,
+    "it": 203,
+    "ja": 366,
+    "ko": 31,
+    "nb": 0,
+    "nb_NO": 64,
+    "nl": 0,
+    "pt": 361,
+    "pt_BR": 361,
+    "pt_PT": 361,
+    "ru": 203,
+    "ta": 355,
+    "th": 9,
+    "tr": 129,
+    "uk": 203,
+    "vi": 357,
+    "zh": 1091,
+    "zh_Hans": 1091,
+    "zh_Hant": 1091
+  },
+  "after": {
+    "ar": 543,
+    "de": 1190,
+    "es": 542,
+    "fil": 386,
+    "fr": 537,
+    "gan": 0,
+    "gan_Hant": 0,
+    "id": 512,
+    "it": 530,
+    "ja": 1190,
+    "ko": 485,
+    "nb": 313,
+    "nb_NO": 349,
+    "nl": 408,
+    "pt": 1190,
+    "pt_BR": 1190,
+    "pt_PT": 1190,
+    "ru": 538,
+    "ta": 614,
+    "th": 367,
+    "tr": 508,
+    "uk": 501,
+    "vi": 641,
+    "zh": 1190,
+    "zh_Hans": 1190,
+    "zh_Hant": 1190
+  },
+  "imported": {
+    "ar": 306,
+    "de": 451,
+    "es": 339,
+    "fil": 386,
+    "fr": 334,
+    "id": 420,
+    "it": 327,
+    "ja": 281,
+    "ko": 454,
+    "nb": 313,
+    "nb_NO": 285,
+    "nl": 408,
+    "pt": 273,
+    "pt_BR": 274,
+    "ru": 335,
+    "ta": 259,
+    "th": 358,
+    "tr": 379,
+    "uk": 298,
+    "vi": 284,
+    "zh_Hans": 5,
+    "zh_Hant": 5
+  },
+  "sources": {
+    "webui": {
+      "repository": "Suwayomi/Suwayomi-WebUI",
+      "revision": "d22e0dfe8a47717b56649f6c90fc2cbaca8399fe",
+      "path": "src/i18n/locales/{locale}.po"
+    },
+    "mihon": {
+      "repository": "mihonapp/mihon",
+      "revision": "f52d890e7f8a3c418ddab41f41d4b577bce0dc06",
+      "path": "i18n/src/commonMain/moko-resources/{locale}/strings.xml"
+    },
+    "komikku": {
+      "repository": "komikku-app/komikku",
+      "revision": "936e25bf99af29e059f06c4ad613ab62df9ae53e",
+      "path": "i18n/src/commonMain/moko-resources/{locale}/strings.xml"
+    },
+    "komikku_extra": {
+      "repository": "komikku-app/komikku",
+      "revision": "936e25bf99af29e059f06c4ad613ab62df9ae53e",
+      "path": "i18n-kmk/src/commonMain/moko-resources/{locale}/strings.xml"
+    }
+  },
+  "pass_two": {
+    "baseline": "dc04b2c1",
+    "before": {
+      "ar": 508,
+      "de": 417,
+      "es": 506,
+      "fil": 347,
+      "fr": 503,
+      "gan": 0,
+      "gan_Hant": 0,
+      "id": 458,
+      "it": 494,
+      "ja": 611,
+      "ko": 428,
+      "nb": 289,
+      "nb_NO": 326,
+      "nl": 356,
+      "pt": 600,
+      "pt_BR": 607,
+      "pt_PT": 600,
+      "ru": 505,
+      "ta": 588,
+      "th": 336,
+      "tr": 469,
+      "uk": 476,
+      "vi": 606,
+      "zh": 1091,
+      "zh_Hans": 1095,
+      "zh_Hant": 1095
+    },
+    "imports_before": 6017,
+    "delta": {
+      "ar": 35,
+      "de": 72,
+      "es": 36,
+      "fil": 39,
+      "fr": 34,
+      "gan": 0,
+      "gan_Hant": 0,
+      "id": 54,
+      "it": 36,
+      "ja": 36,
+      "ko": 57,
+      "nb": 24,
+      "nb_NO": 23,
+      "nl": 52,
+      "pt": 34,
+      "pt_BR": 35,
+      "pt_PT": 34,
+      "ru": 33,
+      "ta": 26,
+      "th": 31,
+      "tr": 39,
+      "uk": 25,
+      "vi": 35,
+      "zh": 0,
+      "zh_Hans": 1,
+      "zh_Hant": 1
+    },
+    "new_imports": 757
+  },
+  "ai_german_pilot": {
+    "baseline": "fcb40fa1",
+    "locale": "de",
+    "before": 489,
+    "added": 701,
+    "after": 1190,
+    "remaining": 0
+  },
+  "ai_chinese_completion": {
+    "baseline": "63b9052b",
+    "locales": {
+      "zh": {
+        "before": 1091,
+        "added": 99,
+        "after": 1190,
+        "remaining": 0
+      },
+      "zh_Hans": {
+        "before": 1096,
+        "added": 94,
+        "after": 1190,
+        "remaining": 0
+      },
+      "zh_Hant": {
+        "before": 1096,
+        "added": 94,
+        "after": 1190,
+        "remaining": 0
+      }
+    }
+  },
+  "ai_japanese_completion": {
+    "baseline": "ed892159",
+    "locale": "ja",
+    "before": 647,
+    "added": 543,
+    "after": 1190,
+    "remaining": 0
+  },
+  "ai_portuguese_completion": {
+    "baseline": "da400eca",
+    "locales": {
+      "pt": {
+        "before": 634,
+        "explicit_added": 556,
+        "inherited_gain": 0,
+        "after": 1190,
+        "remaining": 0
+      },
+      "pt_BR": {
+        "before": 642,
+        "explicit_added": 548,
+        "inherited_gain": 0,
+        "after": 1190,
+        "remaining": 0
+      },
+      "pt_PT": {
+        "before": 634,
+        "explicit_added": 0,
+        "inherited_gain": 556,
+        "after": 1190,
+        "remaining": 0
+      }
+    }
+  }
+}
