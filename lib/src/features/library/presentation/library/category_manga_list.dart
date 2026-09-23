@@ -13,7 +13,9 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../../../graphql/__generated__/schema.graphql.dart';
 import '../../../../routes/router_config.dart';
 import '../../../../utils/extensions/custom_extensions.dart';
+import '../../../../utils/misc/toast/toast.dart';
 import '../../../../widgets/confirm_bulk_download_dialog.dart';
+import '../../../../widgets/download_presets_menu.dart';
 import '../../../../widgets/emoticons.dart';
 import '../../../../widgets/selection_action_bar.dart';
 import '../../../../widgets/shell/update_banner_state.dart';
@@ -23,8 +25,10 @@ import '../../../auth/data/auth_credentials_store.dart';
 import '../../../manga_book/data/downloads/downloads_repository.dart';
 import '../../../manga_book/data/manga_book/manga_book_repository.dart';
 import '../../../manga_book/data/updates/updates_repository.dart';
+import '../../../manga_book/domain/chapter/chapter_download_presets.dart';
 import '../../../manga_book/domain/chapter/chapter_model.dart';
 import '../../../manga_book/domain/manga/manga_model.dart';
+import '../../../manga_book/presentation/manga_details/controller/scanlator_dedup.dart';
 import '../../../manga_book/presentation/manga_details/widgets/edit_manga_category_dialog.dart';
 import '../../../migration/domain/migration_models.dart';
 import '../../../offline/data/offline_chapter_catchup.dart';
@@ -41,13 +45,25 @@ import 'controller/library_manga_list.dart';
 import 'widgets/edit_mangas_category_dialog.dart';
 import 'widgets/library_manga_grid_view.dart';
 
-/// Chapter ids worth sending to the server's download queue: the ones it does
-/// not hold yet. A bulk selection is mostly chapters the server already has,
-/// and queueing those buries the real downloads in thousands of no-ops.
-List<int> serverDownloadIds(List<ChapterDto>? chapters) => [
-  for (final c in chapters ?? const <ChapterDto>[])
-    if (!c.isDownloaded) c.id,
-];
+List<int> serverDownloadIds(
+  List<ChapterDto>? chapters, {
+  DownloadPreset preset = DownloadPreset.all,
+  List<String> preferredScanlators = const [],
+}) {
+  final candidates = chapters ?? const <ChapterDto>[];
+  final filtered = preset == DownloadPreset.all
+      ? candidates
+      : filterPreferredScanlators(candidates, preferredScanlators);
+  return chaptersToQueueForPreset([
+    for (final chapter in filtered)
+      ChapterDownloadCandidate(
+        id: chapter.id,
+        chapterNumber: chapter.chapterNumber,
+        isRead: chapter.isRead,
+        isDownloaded: chapter.isDownloaded,
+      ),
+  ], preset);
+}
 
 class CategoryMangaList extends HookConsumerWidget {
   const CategoryMangaList({super.key, required this.categoryId});
@@ -397,43 +413,72 @@ class CategoryMangaList extends HookConsumerWidget {
                           },
                     onDownloadToServer: !canDownload
                         ? null
-                        : () async {
+                        : (preset) async {
                             final current = ref
                                 .read(authCredentialsStoreProvider.notifier)
                                 .captureSession();
                             final ids = selection.value.toList();
+                            final library =
+                                ref.read(libraryMangaListProvider).value ??
+                                items;
+                            final preferences = {
+                              for (final manga in library)
+                                if (ids.contains(manga.id))
+                                  manga.id: manga
+                                      .metaData
+                                      .effectivePreferredScanlators,
+                            };
                             if (ids.length > 1 &&
                                 !await confirmBulkDownload(
                                   context,
                                   summary: '${ids.length} series',
                                   toDevice: false,
+                                  downloadDescription: context.l10n
+                                      .bulkDownloadPresetDescription(
+                                        downloadPresetLabel(context, preset),
+                                      ),
                                 )) {
                               return;
                             }
+                            if (!context.mounted || !current()) return;
                             selection.value = const {};
                             final repo = ref.read(mangaBookRepositoryProvider);
                             final dl = ref.read(downloadsRepositoryProvider);
                             if (!context.mounted || !current()) return;
-                            for (final id in ids) {
-                              if (!context.mounted || !current()) return;
-                              final chapters = await repo.getChapterList(id);
-                              if (!context.mounted || !current()) return;
-                              final chapterIds = serverDownloadIds(chapters);
-                              if (chapterIds.isNotEmpty) {
-                                await dl.addChaptersBatchToDownloadQueue(
-                                  chapterIds,
+                            var queuedAny = false;
+                            final result = await AsyncValue.guard(() async {
+                              for (final id in ids) {
+                                if (!context.mounted || !current()) return;
+                                final chapters = await repo.getChapterList(id);
+                                if (!context.mounted || !current()) return;
+                                final chapterIds = serverDownloadIds(
+                                  chapters,
+                                  preset: preset,
+                                  preferredScanlators:
+                                      preferences[id] ?? const [],
                                 );
+                                if (chapterIds.isNotEmpty) {
+                                  await dl.addChaptersBatchToDownloadQueue(
+                                    chapterIds,
+                                  );
+                                  queuedAny = true;
+                                }
                               }
+                            });
+                            if (!context.mounted || !current()) return;
+                            if (result.hasError) {
+                              result.showToastOnError(ref.read(toastProvider));
+                              return;
                             }
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Downloading ${ids.length} series to server',
-                                  ),
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  queuedAny
+                                      ? 'Downloading ${ids.length} series to server'
+                                      : context.l10n.nothingToDownload,
                                 ),
-                              );
-                            }
+                              ),
+                            );
                           },
                     onEditCategories: () async {
                       final selected = items
@@ -494,7 +539,7 @@ class _SelectionBar extends StatelessWidget {
   final VoidCallback onMarkRead;
   final VoidCallback onMarkUnread;
   final VoidCallback? onKeepOffline;
-  final VoidCallback? onDownloadToServer;
+  final ValueChanged<DownloadPreset>? onDownloadToServer;
   final VoidCallback onEditCategories;
   final VoidCallback onMigrate;
 
@@ -537,13 +582,7 @@ class _SelectionBar extends StatelessWidget {
           icon: const Icon(Icons.remove_done_rounded),
           onPressed: onMarkUnread,
         ),
-        IconButton(
-          tooltip: onDownloadToServer == null
-              ? context.l10n.accountPermissionDenied
-              : 'Download to server',
-          icon: const Icon(Icons.cloud_download_outlined),
-          onPressed: onDownloadToServer,
-        ),
+        DownloadPresetsMenu(onSelected: onDownloadToServer),
         PopupMenuButton<VoidCallback>(
           tooltip: MaterialLocalizations.of(context).moreButtonTooltip,
           icon: const Icon(Icons.more_vert),
