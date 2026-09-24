@@ -16,8 +16,21 @@ enum OfflineDeviceState {
   downloading,
   downloaded,
   error,
-  orphaned
+  orphaned,
 }
 
 /// How many of a series' chapters to keep on this device automatically.
 enum OfflineKeepRule { off, nUnread, allUnread, all }
+
+/// A manga's own chapter sort axis. The first 4 mirror WebUI's `webUI_sortBy`
+/// values verbatim — names ARE the wire strings (`.name` round-trips directly
+/// to/from server meta, see webui_chapter_sort_meta.dart). `alphabetical` is
+/// Tsumiru-only: it comes from the `flutter_chapterSortIsAlphabetical` flag
+/// and is never written to `webUI_sortBy`.
+enum ChapterSortAxis {
+  source,
+  chapterNumber,
+  uploadedAt,
+  fetchedAt,
+  alphabetical,
+}

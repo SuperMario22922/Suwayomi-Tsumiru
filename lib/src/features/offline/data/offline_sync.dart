@@ -6,11 +6,14 @@
 
 import 'dart:convert';
 
+import 'package:collection/collection.dart';
+
 import '../../../utils/crash/diagnostics.dart';
 import '../../library/domain/category/category_model.dart';
 import '../../manga_book/domain/chapter/chapter_model.dart';
 import '../../manga_book/domain/manga/manga_model.dart';
 import 'offline_database.dart';
+import 'webui_chapter_sort_meta.dart';
 
 /// Mirrors server metadata into the offline catalog during normal online use.
 ///
@@ -103,6 +106,12 @@ class OfflineSync {
         lastReadAt: manga.lastReadChapter?.lastReadAt,
         metaJson: jsonEncode({for (final e in manga.meta) e.key: e.value}),
         totalChapters: manga.chapters.totalCount,
+        // Pre-extracted from the same meta list above, with the same
+        // resolution as the chapter list display (alphabetical flag first,
+        // then webUI_sortBy) so downloads follow what the reader shows.
+        chapterSortMode: chapterSortAxisFromMeta(
+          (key) => manga.meta.firstWhereOrNull((m) => m.key == key)?.value,
+        ),
       );
       // The counts just written include every read the server knew about
       // when the fetch went out; acks landing after it keep their
@@ -195,6 +204,8 @@ class OfflineSync {
           chapterIndex: c.sourceOrder,
           chapterNumber: c.chapterNumber,
           scanlator: c.scanlator,
+          uploadDate: c.uploadDate,
+          fetchedAt: c.fetchedAt,
           isRead: keepReadState ? local!.isRead : c.isRead,
           // Baseline handling — see OfflineChapters.syncedIsRead.
           syncedIsRead: _keepReadBaseline(existingRows[c.id], c)

@@ -9,10 +9,13 @@ OfflineChapter ch(
   bool pinned = false,
   OfflineDeviceState deviceState = OfflineDeviceState.none,
   double? chapterNumber,
+  String? uploadDate,
+  String? fetchedAt,
+  String? name,
 }) => OfflineChapter(
   id: id,
   mangaId: 1,
-  name: 'c$id',
+  name: name ?? 'c$id',
   chapterIndex: idx,
   isRead: read,
   lastPageRead: 0,
@@ -32,6 +35,8 @@ OfflineChapter ch(
   downloadGeneration: 0,
   serverFetchAttempts: 0,
   chapterNumber: chapterNumber,
+  uploadDate: uploadDate,
+  fetchedAt: fetchedAt,
 );
 
 void main() {
@@ -275,6 +280,320 @@ void main() {
           reason: '$rule retention must equal its download set',
         );
       }
+    });
+  });
+
+  group('sortAxis — the keep-window follows a manga\'s OWN chapter sort, not '
+      'a single app-wide order', () {
+    test('sortAxis: null reproduces today\'s exact chapterNumber-else-'
+        'chapterIndex behavior — the pre-existing tests above never pass '
+        'sortAxis and must keep passing unchanged', () {
+      // Same fixture as the very first chapterNumber test above, run once
+      // with sortAxis omitted and once with it explicitly null: identical.
+      final c = [
+        ch(10, 1, read: true, chapterNumber: 1.0),
+        ch(20, 2, read: true, chapterNumber: 50.0),
+        ch(30, 3, chapterNumber: 51.0),
+        ch(40, 4, chapterNumber: 52.0),
+        ch(50, 50, chapterNumber: 0.5),
+      ];
+      expect(desiredChapterIds(c, OfflineKeepRule.nUnread, 2), {30, 40});
+      expect(desiredChapterIds(c, OfflineKeepRule.nUnread, 2, sortAxis: null), {
+        30,
+        40,
+      });
+    });
+
+    test('sortAxis: source ranks by chapterIndex even when chapterNumber '
+        'disagrees — proves the axis choice drives ranking, not the mere '
+        'presence of a chapter number', () {
+      // chapterNumber order: 40 < 30. chapterIndex order: 30 (idx 3) < 40 (idx
+      // 4). Under sortAxis.source, the window must follow chapterIndex.
+      final c = [
+        ch(10, 1, read: true, chapterNumber: 1.0),
+        ch(30, 3, chapterNumber: 90.0), // low index, HIGH number
+        ch(40, 4, chapterNumber: 2.0), // high index, LOW number
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          1,
+          sortAxis: ChapterSortAxis.source,
+        ),
+        {30},
+        reason: 'chapterIndex 3 comes before 4, regardless of chapterNumber',
+      );
+    });
+
+    test('sortAxis: chapterNumber matches the null-fallback numbered path', () {
+      final c = [
+        ch(10, 1, read: true, chapterNumber: 1.0),
+        ch(30, 3, chapterNumber: 2.0),
+        ch(40, 4, chapterNumber: 3.0),
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          1,
+          sortAxis: ChapterSortAxis.chapterNumber,
+        ),
+        {30},
+      );
+    });
+
+    test('sortAxis: uploadedAt ranks by upload timestamp even against '
+        'chapterIndex/chapterNumber order — the accepted risk of following a '
+        'manga\'s own non-narrative sort choice', () {
+      // Chapter 40 has an earlier chapterIndex/chapterNumber than 30, but was
+      // uploaded LATER (e.g. a re-scan or a delayed batch). Under
+      // sortAxis.uploadedAt the window must follow upload order, not index.
+      final c = [
+        ch(10, 1, read: true, chapterNumber: 1.0, uploadDate: '1000'),
+        ch(30, 2, chapterNumber: 2.0, uploadDate: '3000'), // uploaded later
+        ch(40, 3, chapterNumber: 3.0, uploadDate: '2000'), // uploaded earlier
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          1,
+          sortAxis: ChapterSortAxis.uploadedAt,
+        ),
+        {40},
+        reason: 'uploadDate 2000 (chapter 40) precedes 3000 (chapter 30)',
+      );
+    });
+
+    test('sortAxis: fetchedAt ranks by fetch timestamp', () {
+      final c = [
+        ch(10, 1, read: true, chapterNumber: 1.0, fetchedAt: '1000'),
+        ch(30, 2, chapterNumber: 2.0, fetchedAt: '3000'),
+        ch(40, 3, chapterNumber: 3.0, fetchedAt: '2000'),
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          1,
+          sortAxis: ChapterSortAxis.fetchedAt,
+        ),
+        {40},
+      );
+    });
+
+    test('sortAxis: uploadedAt excludes chapters with no synced timestamp '
+        'from both floor and window, mirroring how chapterNumber mode '
+        'excludes unnumbered specials', () {
+      final c = [
+        ch(10, 1, read: true, uploadDate: '1000'),
+        ch(20, 2, uploadDate: '2000'), // unread, ahead
+        ch(30, 3), // unread, but no uploadDate synced yet — excluded
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          5,
+          sortAxis: ChapterSortAxis.uploadedAt,
+        ),
+        {20},
+      );
+    });
+
+    test('two manga with different per-manga sortAxis produce DIFFERENT '
+        'download windows from the SAME underlying chapter data — this is the '
+        'per-series behavior replacing the old single global order', () {
+      // Same three chapters, deliberately non-monotone between the two
+      // axes: chapterNumber order is 10 < 20 < 30, but upload order is
+      // 10 < 30 < 20 (chapter 30 was uploaded before chapter 20).
+      List<OfflineChapter> sameChapters() => [
+        ch(10, 1, read: true, chapterNumber: 1.0, uploadDate: '1000'),
+        ch(20, 2, chapterNumber: 2.0, uploadDate: '3000'), // 2nd by number
+        ch(30, 3, chapterNumber: 3.0, uploadDate: '2000'), // 2nd by upload
+      ];
+
+      // Manga A: sorted by chapterNumber in WebUI/Tsumiru — downloads 20.
+      expect(
+        desiredChapterIds(
+          sameChapters(),
+          OfflineKeepRule.nUnread,
+          1,
+          sortAxis: ChapterSortAxis.chapterNumber,
+        ),
+        {20},
+      );
+      // Manga B: sorted by uploadedAt — downloads 30, NOT 20, from the
+      // exact same chapter rows. If this were still one global order (as
+      // before this feature), both manga would have downloaded the same
+      // chapter here.
+      expect(
+        desiredChapterIds(
+          sameChapters(),
+          OfflineKeepRule.nUnread,
+          1,
+          sortAxis: ChapterSortAxis.uploadedAt,
+        ),
+        {30},
+      );
+    });
+
+    test('sortAxis: fetchedAt — reading one chapter of a batch fetched at the '
+        'same instant keeps its unread siblings in the window (ties broken '
+        'by source order, as the chapter list display does)', () {
+      // One source refresh stamps every new chapter with the same fetchedAt.
+      final c = [
+        ch(10, 1, read: true, fetchedAt: '5000'),
+        ch(20, 2, fetchedAt: '5000'),
+        ch(30, 3, fetchedAt: '5000'),
+        ch(40, 4, fetchedAt: '6000'),
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          5,
+          sortAxis: ChapterSortAxis.fetchedAt,
+        ),
+        {20, 30, 40},
+      );
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          2,
+          sortAxis: ChapterSortAxis.fetchedAt,
+        ),
+        {20, 30},
+        reason: 'same-stamp siblings come first, in source order',
+      );
+    });
+
+    test('sortAxis: uploadedAt — same-timestamp siblings of the read chapter '
+        'stay in the window', () {
+      final c = [
+        ch(10, 1, read: true, uploadDate: '1000'),
+        ch(20, 2, uploadDate: '1000'),
+        ch(30, 3, uploadDate: '1000'),
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          5,
+          sortAxis: ChapterSortAxis.uploadedAt,
+        ),
+        {20, 30},
+      );
+    });
+
+    test('sortAxis: chapterNumber still excludes a same-number unread '
+        'chapter (scanlator duplicate of the one just read) — the tie-break '
+        'only applies to date and name axes', () {
+      final c = [
+        ch(10, 1, read: true, chapterNumber: 5.0),
+        ch(11, 2, chapterNumber: 5.0), // other scanlator's ch. 5
+        ch(20, 3, chapterNumber: 6.0),
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          5,
+          sortAxis: ChapterSortAxis.chapterNumber,
+        ),
+        {20},
+      );
+    });
+
+    for (final axis in [
+      ChapterSortAxis.uploadedAt,
+      ChapterSortAxis.fetchedAt,
+    ]) {
+      test('sortAxis: ${axis.name} with no chapter timestamp synced yet (rows '
+          'from before v18) falls back to the legacy ranking instead of '
+          'downloading nothing', () {
+        final c = [
+          ch(10, 1, read: true, chapterNumber: 1.0),
+          ch(20, 2, chapterNumber: 2.0),
+          ch(30, 3, chapterNumber: 3.0),
+        ];
+        expect(
+          desiredChapterIds(c, OfflineKeepRule.nUnread, 1, sortAxis: axis),
+          desiredChapterIds(c, OfflineKeepRule.nUnread, 1),
+        );
+        expect(
+          desiredChapterIds(c, OfflineKeepRule.nUnread, 1, sortAxis: axis),
+          {20},
+        );
+      });
+    }
+
+    test(
+      'sortAxis: alphabetical ranks by chapter name (case-insensitive), '
+      'matching the reader\'s next-chapter order, not by number or index',
+      () {
+        final c = [
+          ch(10, 1, read: true, chapterNumber: 1.0, name: 'Beta'),
+          ch(20, 2, chapterNumber: 2.0, name: 'alpha'), // before the floor
+          ch(30, 3, chapterNumber: 3.0, name: 'Gamma'),
+          ch(40, 4, chapterNumber: 4.0, name: 'delta'),
+        ];
+        expect(
+          desiredChapterIds(
+            c,
+            OfflineKeepRule.nUnread,
+            1,
+            sortAxis: ChapterSortAxis.alphabetical,
+          ),
+          {40},
+          reason: 'delta is the first name after the read Beta',
+        );
+        expect(
+          desiredChapterIds(
+            c,
+            OfflineKeepRule.nUnread,
+            5,
+            sortAxis: ChapterSortAxis.alphabetical,
+          ),
+          {30, 40},
+          reason: 'alpha sorts before the read Beta, so it is behind the floor',
+        );
+      },
+    );
+
+    test('sortAxis: alphabetical — an identical name is broken by source '
+        'order, not dropped', () {
+      final c = [
+        ch(10, 1, read: true, name: 'Extra'),
+        ch(20, 2, name: 'extra'),
+      ];
+      expect(
+        desiredChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          5,
+          sortAxis: ChapterSortAxis.alphabetical,
+        ),
+        {20},
+      );
+    });
+
+    test('retainedChapterIds forwards sortAxis to the download window', () {
+      final c = [
+        ch(10, 1, read: true, fetchedAt: '5000'),
+        ch(20, 2, fetchedAt: '5000'),
+      ];
+      expect(
+        retainedChapterIds(
+          c,
+          OfflineKeepRule.nUnread,
+          5,
+          sortAxis: ChapterSortAxis.fetchedAt,
+        ),
+        {20},
+      );
     });
   });
 }

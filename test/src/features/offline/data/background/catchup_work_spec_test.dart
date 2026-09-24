@@ -316,4 +316,59 @@ void main() {
       reason: 'a chapter nobody deleted defaults to 0',
     );
   });
+
+  test('chapterSortMode round-trips through the spec (alphabetical too), '
+      'and defaults to null when absent', () {
+    const spec = CatchupMangaSpec(
+      mangaId: 1,
+      keepRule: OfflineKeepRule.nUnread,
+      keepUnreadCount: 3,
+      onDeviceChapterIds: {},
+      pinnedChapterIds: {},
+      chapterSortMode: ChapterSortAxis.uploadedAt,
+    );
+    final restored = CatchupMangaSpec.fromJson(
+      jsonDecode(jsonEncode(spec.toJson())) as Map<String, Object?>,
+    );
+    expect(restored.chapterSortMode, ChapterSortAxis.uploadedAt);
+
+    // The Tsumiru-only axis survives the hop to the background worker too.
+    final alphabetical = CatchupMangaSpec.fromJson(
+      jsonDecode(
+            jsonEncode(
+              const CatchupMangaSpec(
+                mangaId: 1,
+                keepRule: OfflineKeepRule.nUnread,
+                keepUnreadCount: 3,
+                onDeviceChapterIds: {},
+                pinnedChapterIds: {},
+                chapterSortMode: ChapterSortAxis.alphabetical,
+              ).toJson(),
+            ),
+          )
+          as Map<String, Object?>,
+    );
+    expect(alphabetical.chapterSortMode, ChapterSortAxis.alphabetical);
+
+    // Legacy/unset spec (written before this field existed, or a manga with
+    // no webUI_sortBy meta) must not throw and must default to null, not to
+    // some fallback axis — the caller's own null-fallback logic decides.
+    final legacy = CatchupMangaSpec.fromJson({
+      'mangaId': 1,
+      'keepRule': 'nUnread',
+      'keepUnreadCount': 3,
+    });
+    expect(legacy.chapterSortMode, isNull);
+  });
+
+  test('an unrecognized chapterSortMode string degrades to null, not a '
+      'crash — same resilience as the unknown keep-rule case above', () {
+    final restored = CatchupMangaSpec.fromJson({
+      'mangaId': 1,
+      'keepRule': 'nUnread',
+      'keepUnreadCount': 3,
+      'chapterSortMode': 'someFutureAxis',
+    });
+    expect(restored.chapterSortMode, isNull);
+  });
 }

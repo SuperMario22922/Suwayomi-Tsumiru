@@ -9,11 +9,16 @@ import 'reconcile_types.dart';
 
 /// Chapter ids that should be on-device for one manga, given its keep-rule.
 /// Always includes pinned chapters (manual saves are sticky, rule-independent).
+///
+/// [sortAxis] is the manga's own chapter sort (null when it has no per-manga
+/// sort meta) — see ChapterSortAxis. Null falls back to the pre-existing
+/// chapterNumber-else-chapterIndex ranking below.
 Set<int> desiredChapterIds(
   List<OfflineChapter> chapters,
   OfflineKeepRule rule,
-  int keepUnreadCount,
-) {
+  int keepUnreadCount, {
+  ChapterSortAxis? sortAxis,
+}) {
   final pinned = {
     for (final c in chapters)
       if (c.pinned) c.id,
@@ -54,24 +59,90 @@ Set<int> desiredChapterIds(
     // reading position and starve the window). Such chapters can still be
     // pinned, and if already on-device+unread they survive via retainedChapterIds.
     OfflineKeepRule.nUnread => () {
-      final byNumber = chapters.any((c) => (c.chapterNumber ?? 0) > 0);
-      bool ranked(OfflineChapter c) => !byNumber || (c.chapterNumber ?? 0) > 0;
-      double readOrder(OfflineChapter c) =>
-          byNumber ? c.chapterNumber! : c.chapterIndex.toDouble();
+      int? epoch(String? v) => v == null ? null : int.tryParse(v);
+      int stamp(OfflineChapter c, ChapterSortAxis? axis) =>
+          switch (axis) {
+            ChapterSortAxis.uploadedAt => epoch(c.uploadDate),
+            ChapterSortAxis.fetchedAt => epoch(c.fetchedAt),
+            _ => null,
+          } ??
+          0;
 
-      final floor = chapters
-          .where((c) => c.isRead && ranked(c))
-          .fold(-1.0, (m, c) => readOrder(c) > m ? readOrder(c) : m);
+      // Chapter timestamps only arrive with a row's next down-sync: until
+      // then no chapter carries one, so rank the pre-existing way (null)
+      // rather than download nothing.
+      final axis =
+          (sortAxis == ChapterSortAxis.uploadedAt ||
+                  sortAxis == ChapterSortAxis.fetchedAt) &&
+              !chapters.any((c) => stamp(c, sortAxis) > 0)
+          ? null
+          : sortAxis;
+
+      // axis == null (no per-manga sort meta) is exactly the
+      // byNumber/chapterIndex logic from before per-manga axes existed.
+      final byNumber = axis == null
+          ? chapters.any((c) => (c.chapterNumber ?? 0) > 0)
+          : axis == ChapterSortAxis.chapterNumber;
+
+      bool ranked(OfflineChapter c) => switch (axis) {
+        null => !byNumber || (c.chapterNumber ?? 0) > 0,
+        ChapterSortAxis.source => true, // chapterIndex is always present
+        ChapterSortAxis.chapterNumber => (c.chapterNumber ?? 0) > 0,
+        ChapterSortAxis.uploadedAt ||
+        ChapterSortAxis.fetchedAt => stamp(c, axis) > 0,
+        ChapterSortAxis.alphabetical => true, // name is always present
+      };
+      int byIndex(OfflineChapter a, OfflineChapter b) =>
+          a.chapterIndex.compareTo(b.chapterIndex);
+      int byAxis(OfflineChapter a, OfflineChapter b) => switch (axis) {
+        null =>
+          byNumber
+              ? a.chapterNumber!.compareTo(b.chapterNumber!)
+              : byIndex(a, b),
+        ChapterSortAxis.source => byIndex(a, b),
+        ChapterSortAxis.chapterNumber => a.chapterNumber!.compareTo(
+          b.chapterNumber!,
+        ),
+        ChapterSortAxis.uploadedAt ||
+        ChapterSortAxis.fetchedAt => stamp(a, axis).compareTo(stamp(b, axis)),
+        // Same key as the chapter list display, so the reader's next chapter
+        // and the download-ahead window agree.
+        ChapterSortAxis.alphabetical => a.name.toLowerCase().compareTo(
+          b.name.toLowerCase(),
+        ),
+      };
+      // A shared date or name is routine (a whole batch fetched at once
+      // shares one fetchedAt) and marks distinct chapters: break the tie by
+      // source order, as the display does, so reading one doesn't push its
+      // same-stamp siblings behind the floor. A chapterNumber tie is a
+      // scanlator duplicate of the same chapter, which the floor deliberately
+      // keeps excluding.
+      final breakTies =
+          axis == ChapterSortAxis.uploadedAt ||
+          axis == ChapterSortAxis.fetchedAt ||
+          axis == ChapterSortAxis.alphabetical;
+      int readOrder(OfflineChapter a, OfflineChapter b) {
+        final r = byAxis(a, b);
+        return r != 0 || !breakTies ? r : byIndex(a, b);
+      }
+
+      final read = chapters.where((c) => c.isRead && ranked(c));
+      final floor = read.isEmpty
+          ? null
+          : read.reduce((m, c) => readOrder(c, m) > 0 ? c : m);
       return (chapters
               .where(
                 (c) =>
                     !c.isRead &&
                     ranked(c) &&
                     c.deviceState != OfflineDeviceState.error &&
-                    readOrder(c) > floor,
+                    (floor == null || readOrder(c, floor) > 0),
               )
               .toList()
-            ..sort((a, b) => readOrder(a).compareTo(readOrder(b))))
+            ..sort((a, b) {
+              final r = readOrder(a, b);
+              return r != 0 ? r : byIndex(a, b);
+            }))
           .take(keepUnreadCount)
           .map((c) => c.id)
           .toSet();
@@ -98,9 +169,15 @@ Set<int> desiredChapterIds(
 Set<int> retainedChapterIds(
   List<OfflineChapter> chapters,
   OfflineKeepRule rule,
-  int keepUnreadCount,
-) {
-  final desired = desiredChapterIds(chapters, rule, keepUnreadCount);
+  int keepUnreadCount, {
+  ChapterSortAxis? sortAxis,
+}) {
+  final desired = desiredChapterIds(
+    chapters,
+    rule,
+    keepUnreadCount,
+    sortAxis: sortAxis,
+  );
   if (rule != OfflineKeepRule.nUnread) return desired;
   return {
     ...desired,
