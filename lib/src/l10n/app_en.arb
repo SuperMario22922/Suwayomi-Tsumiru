@@ -3779,5 +3779,98 @@
     "placeholders": {
       "preset": { "type": "String" }
     }
+  },
+  "syncyomi": "SyncYomi",
+  "@syncyomi": {
+    "description": "Settings entry and screen title for the SyncYomi library sync server"
+  },
+  "syncyomiSubtitle": "Sync your library and reading progress through a SyncYomi server",
+  "syncYomiEnabled": "Sync with SyncYomi",
+  "syncYomiHost": "Host",
+  "@syncYomiHost": {
+    "description": "Base URL of the SyncYomi server, e.g. the origin only, without /api/sync"
+  },
+  "syncYomiHostHint": "https://syncyomi.example.com",
+  "syncYomiHostInvalid": "Enter a URL starting with http:// or https://",
+  "syncYomiApiKey": "API key",
+  "syncYomiSet": "Set",
+  "syncYomiNotSet": "Not set",
+  "syncYomiSyncInterval": "Sync interval",
+  "syncYomiEvery30Minutes": "Every 30 minutes",
+  "syncYomiEveryHour": "Every hour",
+  "syncYomiEvery3Hours": "Every 3 hours",
+  "syncYomiEvery6Hours": "Every 6 hours",
+  "syncYomiEvery12Hours": "Every 12 hours",
+  "syncYomiDaily": "Daily",
+  "syncYomiWeekly": "Weekly",
+  "syncYomiEveryNHours": "{count, plural, =1{Every hour} other{Every {count} hours}}",
+  "@syncYomiEveryNHours": {
+    "description": "Interval wording for a server-set interval the picker does not offer",
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "syncYomiEveryNMinutes": "{count, plural, =1{Every minute} other{Every {count} minutes}}",
+  "@syncYomiEveryNMinutes": {
+    "description": "Interval wording for a server-set interval under an hour",
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "syncYomiSyncData": "Sync data",
+  "@syncYomiSyncData": {
+    "description": "Which kinds of data a SyncYomi sync carries"
+  },
+  "syncYomiSyncDataNone": "Nothing selected",
+  "syncYomiSyncDataInclude": "Include: {list}",
+  "@syncYomiSyncDataInclude": {
+    "description": "Summary of the data kinds a sync includes, comma separated",
+    "placeholders": {
+      "list": { "type": "String" }
+    }
+  },
+  "syncYomiSyncDataManga": "Library entries",
+  "syncYomiSyncDataChapters": "Chapters",
+  "syncYomiSyncDataCategories": "Categories",
+  "syncYomiSyncDataHistory": "History",
+  "syncYomiSyncDataTracking": "Tracking",
+  "syncYomiSyncNow": "Sync now",
+  "syncYomiNeverSynced": "Never synced",
+  "syncYomiLastSynced": "Last synced {time}",
+  "@syncYomiLastSynced": {
+    "description": "Status line after a successful sync; time is a localised date and time",
+    "placeholders": {
+      "time": { "type": "String" }
+    }
+  },
+  "syncYomiLastSyncFailed": "Last sync failed: {error}",
+  "@syncYomiLastSyncFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "syncYomiUnknownError": "Unknown error",
+  "syncYomiSyncing": "Syncing…",
+  "@syncYomiSyncing": {
+    "description": "Status line and tooltip while a step the app does not know is running"
+  },
+  "syncYomiSyncingStep": "Syncing: {step}",
+  "@syncYomiSyncingStep": {
+    "placeholders": {
+      "step": { "type": "String" }
+    }
+  },
+  "syncYomiStepStarting": "Starting",
+  "syncYomiStepCreatingBackup": "Creating backup",
+  "syncYomiStepDownloading": "Downloading",
+  "syncYomiStepMerging": "Merging",
+  "syncYomiStepUploading": "Uploading",
+  "syncYomiStepRestoring": "Restoring",
+  "syncYomiSyncStarted": "Sync started",
+  "syncYomiAlreadyRunning": "A sync is already running",
+  "syncYomiDisabled": "Turn on Sync with SyncYomi first",
+  "syncYomiUnsupported": "This server does not support SyncYomi. Update Suwayomi to use it.",
+  "@syncYomiUnsupported": {
+    "description": "Message on the SyncYomi settings screen when the server has no SyncYomi settings"
   }
 }

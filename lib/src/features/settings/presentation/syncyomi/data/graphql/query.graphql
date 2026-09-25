@@ -1,0 +1,62 @@
+query SyncYomiLegacySettings {
+  settings {
+    ...SyncYomiSettingsDto
+  }
+}
+
+mutation UpdateSyncYomiEnabled($syncYomiEnabled: Boolean!) {
+  setSettings(input: {settings: {syncYomiEnabled: $syncYomiEnabled}}) {
+    settings {
+      ...SyncYomiSettingsDto
+    }
+  }
+}
+
+mutation UpdateSyncYomiHost($syncYomiHost: String!) {
+  setSettings(input: {settings: {syncYomiHost: $syncYomiHost}}) {
+    settings {
+      ...SyncYomiSettingsDto
+    }
+  }
+}
+
+mutation UpdateSyncYomiApiKey($syncYomiApiKey: String!) {
+  setSettings(input: {settings: {syncYomiApiKey: $syncYomiApiKey}}) {
+    settings {
+      ...SyncYomiSettingsDto
+    }
+  }
+}
+
+mutation UpdateSyncYomiInterval($syncInterval: Duration!) {
+  setSettings(input: {settings: {syncInterval: $syncInterval}}) {
+    settings {
+      ...SyncYomiSettingsDto
+    }
+  }
+}
+
+mutation UpdateSyncYomiData($syncDataManga: Boolean!, $syncDataChapters: Boolean!, $syncDataCategories: Boolean!, $syncDataHistory: Boolean!, $syncDataTracking: Boolean!) {
+  setSettings(
+    input: {settings: {syncDataManga: $syncDataManga, syncDataChapters: $syncDataChapters, syncDataCategories: $syncDataCategories, syncDataHistory: $syncDataHistory, syncDataTracking: $syncDataTracking}}
+  ) {
+    settings {
+      ...SyncYomiSettingsDto
+    }
+  }
+}
+
+mutation StartSync {
+  startSync(input: {}) {
+    result
+  }
+}
+
+query LastSyncStatus {
+  lastSyncStatus {
+    state
+    errorMessage
+    startDate
+    endDate
+  }
+}
