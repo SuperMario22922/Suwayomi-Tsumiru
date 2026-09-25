@@ -32,6 +32,7 @@ import '../../settings/presentation/appearance/widgets/app_theme_selector/app_th
 import '../../settings/presentation/connection/custom_headers_section.dart';
 import '../../settings/presentation/server/widget/client/server_port_tile/server_port_tile.dart';
 import '../../settings/presentation/server/widget/client/server_url_tile/server_url_tile.dart';
+import '../../settings/widgets/app_theme_mode_tile/app_theme_mode_tile.dart';
 import '../data/onboarding_complete.dart';
 import '../data/server_discovery.dart';
 import '../data/server_resolver.dart';
@@ -103,70 +104,77 @@ class OnboardingScreen extends HookConsumerWidget {
             ),
           ),
           SafeArea(
-            child: Column(
-              children: [
-                const SizedBox(height: 12),
-                // Brand wordmark, centered, with a top-right "Skip" escape on
-                // every step except the final one (nothing left to skip there).
-                Stack(
-                  alignment: Alignment.center,
+            // Wide desktop windows keep onboarding a readable column.
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 620),
+                child: Column(
                   children: [
-                    const _BrandHeader(),
-                    if (step.value < _stepCount - 1)
-                      Positioned(
-                        right: 4,
-                        child: TextButton(
-                          onPressed: activity.value == null ? finish : null,
-                          child: Text(context.l10n.onboardingSkip),
+                    const SizedBox(height: 12),
+                    // Brand wordmark, centered, with a top-right "Skip" escape on
+                    // every step except the final one (nothing left to skip there).
+                    Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        const _BrandHeader(),
+                        if (step.value < _stepCount - 1)
+                          Positioned(
+                            right: 4,
+                            child: TextButton(
+                              onPressed: activity.value == null ? finish : null,
+                              child: Text(context.l10n.onboardingSkip),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _StepDots(count: _stepCount, active: step.value),
+                    Expanded(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 250),
+                        child: SingleChildScrollView(
+                          key: ValueKey(step.value),
+                          padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+                          child: switch (step.value) {
+                            0 => const _ThemeStep(),
+                            1 => _ServerStep(
+                              nextRequest: nextRequest.value,
+                              onActivityChanged: (value) {
+                                if (context.mounted && step.value == 1) {
+                                  activity.value = value;
+                                }
+                              },
+                              onVerifiedChanged: (v) =>
+                                  serverVerified.value = v,
+                              onSignedIn: () {
+                                activity.value = null;
+                                serverVerified.value = true;
+                                step.value = 2;
+                              },
+                            ),
+                            _ => const _FinishStep(),
+                          },
                         ),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _StepDots(count: _stepCount, active: step.value),
-                Expanded(
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 250),
-                    child: SingleChildScrollView(
-                      key: ValueKey(step.value),
-                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
-                      child: switch (step.value) {
-                        0 => const _ThemeStep(),
-                        1 => _ServerStep(
-                          nextRequest: nextRequest.value,
-                          onActivityChanged: (value) {
-                            if (context.mounted && step.value == 1) {
-                              activity.value = value;
-                            }
-                          },
-                          onVerifiedChanged: (v) => serverVerified.value = v,
-                          onSignedIn: () {
-                            activity.value = null;
-                            serverVerified.value = true;
-                            step.value = 2;
-                          },
-                        ),
-                        _ => const _FinishStep(),
+                    ),
+                    _NavBar(
+                      activity: step.value == 1 ? activity.value : null,
+                      showBack: step.value > 0,
+                      isLast: isLast,
+                      onBack: () => moveTo(step.value - 1),
+                      onNext: () {
+                        if (step.value == 1 && !serverVerified.value) {
+                          nextRequest.value++;
+                        } else if (isLast) {
+                          finish();
+                        } else {
+                          moveTo(step.value + 1);
+                        }
                       },
                     ),
-                  ),
+                  ],
                 ),
-                _NavBar(
-                  activity: step.value == 1 ? activity.value : null,
-                  showBack: step.value > 0,
-                  isLast: isLast,
-                  onBack: () => moveTo(step.value - 1),
-                  onNext: () {
-                    if (step.value == 1 && !serverVerified.value) {
-                      nextRequest.value++;
-                    } else if (isLast) {
-                      finish();
-                    } else {
-                      moveTo(step.value + 1);
-                    }
-                  },
-                ),
-              ],
+              ),
             ),
           ),
         ],
@@ -174,6 +182,13 @@ class OnboardingScreen extends HookConsumerWidget {
     );
   }
 }
+
+/// The swirl mark for the brightness in use: the light artwork is a darker
+/// logo drawn for pale surfaces, the default one reads on dark ones.
+AssetGenImage _brandLogo(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.light
+    ? Assets.icons.logoOnLight
+    : Assets.icons.darkIcon;
 
 /// The swirl logo + "Tsumiru" wordmark shown at the top of every step.
 class _BrandHeader extends StatelessWidget {
@@ -184,7 +199,7 @@ class _BrandHeader extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Image.asset(Assets.icons.darkIcon.path, height: 26),
+        Image.asset(_brandLogo(context).path, height: 26),
         const SizedBox(width: 8),
         Text(
           'Tsumiru',
@@ -294,18 +309,26 @@ class _NavBar extends StatelessWidget {
 
 // --- Step 1: theme ----------------------------------------------------------
 
-class _ThemeStep extends StatelessWidget {
+class _ThemeStep extends ConsumerWidget {
   const _ThemeStep();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cs = context.theme.colorScheme;
+    final mode = ref.watch(appThemeModeProvider) ?? ThemeMode.system;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 12),
         // The big brand mark — the swirl logo above the welcome heading.
-        Center(child: Image.asset(Assets.icons.darkIcon.path, height: 160)),
+        Center(
+          child: Image.asset(
+            _brandLogo(context).path,
+            // Short, wide windows (desktop, landscape) shrink the mark so the
+            // theme row still fits; portrait phones keep it full size.
+            height: _compactLogo(MediaQuery.sizeOf(context)) ? 96 : 160,
+          ),
+        ),
         const SizedBox(height: 24),
         Text(
           context.l10n.onboardingWelcomeTitle,
@@ -319,11 +342,52 @@ class _ThemeStep extends StatelessWidget {
           style: TextStyle(color: cs.onSurfaceVariant),
         ),
         const SizedBox(height: 28),
-        Text(
-          context.l10n.onboardingChooseTheme,
-          style: context.textTheme.titleMedium,
+        Text(context.l10n.appearance, style: context.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: SegmentedButton<ThemeMode>(
+            segments: [
+              ButtonSegment(
+                value: ThemeMode.system,
+                icon: const Icon(Icons.brightness_auto_rounded),
+                label: Text(context.l10n.themeModeSystem),
+              ),
+              ButtonSegment(
+                value: ThemeMode.light,
+                icon: const Icon(Icons.light_mode_rounded),
+                label: Text(context.l10n.themeModeLight),
+              ),
+              ButtonSegment(
+                value: ThemeMode.dark,
+                icon: const Icon(Icons.dark_mode_rounded),
+                label: Text(context.l10n.themeModeDark),
+              ),
+            ],
+            selected: {mode},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) =>
+                ref.read(appThemeModeProvider.notifier).update(selection.first),
+            style: ButtonStyle(
+              backgroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.selected)
+                    ? cs.secondaryContainer
+                    : null,
+              ),
+              foregroundColor: WidgetStatePropertyAll(cs.onSurface),
+              side: WidgetStatePropertyAll(
+                BorderSide(color: cs.outlineVariant),
+              ),
+            ),
+          ),
         ),
-        const ThemeSelector(),
+        const SizedBox(height: 20),
+        ThemeSelector(
+          title: Text(
+            context.l10n.onboardingChooseTheme,
+            style: context.textTheme.titleMedium,
+          ),
+        ),
       ],
     );
   }
@@ -354,6 +418,98 @@ enum _TestState {
 final onboardingHttpClientProvider = Provider<http.Client Function()>(
   (Ref ref) => http.Client.new,
 );
+
+/// Keeps a found host:port only if it answers as Suwayomi, or challenges for
+/// Basic auth (such a server can't prove what it is before sign-in, and Test
+/// connection handles its login). Closes [client].
+@visibleForTesting
+Future<DiscoveredServer?> confirmLanServer(
+  String url, {
+  required http.Client client,
+  Map<String, String>? extraHeaders,
+}) async {
+  try {
+    final result = await probeServer(
+      url,
+      client: client,
+      extraHeaders: extraHeaders,
+    );
+    if (!result.confirmed && !result.basicGated) return null;
+    return DiscoveredServer(
+      url: url,
+      name: result.serverName,
+      version: result.serverVersion,
+    );
+  } catch (_) {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
+/// The LAN sweep behind "Search my network". Overridable in widget tests so the
+/// step can be driven without touching the network.
+final lanServerScanProvider =
+    Provider<Future<List<DiscoveredServer>> Function()>(
+      (ref) =>
+          () => discoverServersOnLan(
+            confirm: (url) => confirmLanServer(
+              url,
+              client: ref.read(onboardingHttpClientProvider)(),
+              extraHeaders: ref.read(customHttpHeadersProvider).value,
+            ),
+          ),
+    );
+
+/// The picker row label: name and version when the server reported them, then
+/// the address, e.g. `Suwayomi-Server v2.3.2162 · 192.168.2.4:4568`.
+String _serverLabel(DiscoveredServer server) {
+  final name = server.name?.trim();
+  final version = server.version?.trim();
+  if (name == null || name.isEmpty) return server.address;
+  final titled = (version == null || version.isEmpty)
+      ? name
+      : '$name v$version';
+  return '$titled · ${server.address}';
+}
+
+/// Picker shown when "Search my network" finds more than one Suwayomi server.
+/// Popping with a server is the only action; dismissing picks nothing.
+class _ServerPickerSheet extends StatelessWidget {
+  const _ServerPickerSheet({required this.servers});
+
+  final List<DiscoveredServer> servers;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
+              child: Text(
+                context.l10n.onboardingChooseServer,
+                style: context.theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            for (final server in servers)
+              ListTile(
+                leading: const Icon(Icons.dns_outlined),
+                title: Text(_serverLabel(server)),
+                onTap: () => Navigator.pop(context, server),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _ServerStep extends HookConsumerWidget {
   const _ServerStep({
@@ -391,12 +547,20 @@ class _ServerStep extends HookConsumerWidget {
     final userController = useTextEditingController();
     final passController = useTextEditingController();
     final authChoice = useState(AuthType.basic);
+    // Once the user picks a method themselves, detection stops overriding it.
+    final userChangedAuth = useState(false);
     final credsRejected = useState(false);
     final showAccountCodes =
         authChoice.value == AuthType.uiLogin &&
         (ref.watch(authTypeKeyProvider) != AuthType.uiLogin ||
             ref.watch(settledAccountAccessProvider).capability !=
                 AccountCapability.unsupported);
+
+    // Pre-select the sign-in method the server's responses point at; an
+    // undetectable server falls back to Basic. A manual pick always wins.
+    void applyDetectedAuth(AuthType? detected) {
+      if (!userChangedAuth.value) authChoice.value = detected ?? AuthType.basic;
+    }
 
     void resetToIdle() {
       if (state.value != _TestState.idle) {
@@ -537,14 +701,16 @@ class _ServerStep extends HookConsumerWidget {
       resolvedUrl.value = url;
       final client = ref.read(onboardingHttpClientProvider)();
       try {
-        if (!await webAuthRequired(
+        final probe = await webAuthProbe(
           url,
           client: client,
           extraHeaders: ref.read(customHttpHeadersProvider).value,
-        )) {
+        );
+        if (!probe.required) {
           await markConnected();
           return;
         }
+        applyDetectedAuth(probe.detected);
         final hasCreds =
             userController.text.trim().isNotEmpty &&
             passController.text.isNotEmpty;
@@ -617,6 +783,7 @@ class _ServerStep extends HookConsumerWidget {
             if (!needsLogin) {
               await markConnected();
             } else {
+              applyDetectedAuth(result.detectedAuthType);
               final hasCreds =
                   userController.text.trim().isNotEmpty &&
                   passController.text.isNotEmpty;
@@ -655,27 +822,47 @@ class _ServerStep extends HookConsumerWidget {
       return null;
     }, const []);
 
-    // "Search my network": scan the LAN for a Suwayomi server on :4567, fill
-    // the field, then test it.
+    // "Search my network": sweep the LAN for Suwayomi servers, fill the field
+    // with the one found (or let the user pick when several answered), then
+    // test it.
     Future<void> searchNetwork() async {
       if (kIsWeb) return;
       final noServerMsg = context.l10n.onboardingNoServerFound;
       state.value = _TestState.searching;
       errorDetail.value = null;
       onVerifiedChanged(false);
-      String? found;
+      List<DiscoveredServer> found;
       try {
-        found = await discoverServerOnLan();
+        found = await ref.read(lanServerScanProvider)();
       } catch (_) {
-        found = null;
+        found = const [];
       }
-      if (found == null) {
+      if (!context.mounted) return;
+      if (found.isEmpty) {
         errorDetail.value = noServerMsg;
         state.value = _TestState.failed;
         onVerifiedChanged(false);
         return;
       }
-      urlController.text = found;
+      var chosen = found.first;
+      if (found.length > 1) {
+        // The sweep is done; nothing is "being searched" while the picker is up.
+        resetToIdle();
+        final picked = await showModalBottomSheet<DiscoveredServer>(
+          context: context,
+          showDragHandle: true,
+          isScrollControlled: true,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) => _ServerPickerSheet(servers: found),
+        );
+        if (!context.mounted) return;
+        // Dismissed without choosing: no server picked, nothing to test.
+        if (picked == null) return;
+        chosen = picked;
+      }
+      urlController.text = chosen.url;
       await testConnection();
     }
 
@@ -876,6 +1063,7 @@ class _ServerStep extends HookConsumerWidget {
             ],
             onSelected: (m) {
               if (m != null) {
+                userChangedAuth.value = true;
                 authChoice.value = m;
                 credsRejected.value = false;
               }
@@ -1121,3 +1309,6 @@ class _FinishStep extends StatelessWidget {
     );
   }
 }
+
+bool _compactLogo(Size screen) =>
+    screen.height < 1000 && screen.width > screen.height;
