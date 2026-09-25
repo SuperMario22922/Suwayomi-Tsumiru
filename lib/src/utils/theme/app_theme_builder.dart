@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../constants/app_theme.dart';
 import 'app_color_scheme.dart';
+import 'brand.dart';
 import 'theme_tokens.dart';
 
 /// Single source of truth for app ThemeData. Named themes use brand tokens;
@@ -14,32 +15,43 @@ ThemeData buildAppTheme({
   required Color customSeed,
   required bool amoled,
 }) {
+  final tokens = theme == AppTheme.custom ? null : tokensFor(theme, brightness);
   ColorScheme scheme = theme == AppTheme.custom
       ? ColorScheme.fromSeed(seedColor: customSeed, brightness: brightness)
-      : schemeFromTokens(tokensFor(theme, brightness), brightness);
+      : schemeFromTokens(tokens!, brightness);
 
   if (brightness == Brightness.dark && amoled) {
     scheme = applyAmoled(scheme);
   }
 
+  // theme-kit's own light gradients and on-accent colour; the dark blocks and
+  // Custom keep the accent→accent2 gradient and its dark content colour.
+  final brandColors = BrandColors(
+    gradient: tokens?.grad ?? schemeBrandGradient(scheme),
+    onGradient: tokens?.onAccent ?? const Color(0xFF0B0D1A),
+    success: brandSuccessColor(brightness),
+    neutral: theme == AppTheme.mono && brightness == Brightness.light,
+  );
+
   final primary = scheme.primary;
   final outline = scheme.outlineVariant;
   // A lighter, more vibrant blue for text/outline actions (Uninstall, links…).
-  final brightPrimary = Color.lerp(primary, Colors.white, 0.22)!;
+  final brightPrimary = brandBrightAccent(scheme);
 
   ButtonStyle filledLike() => ButtonStyle(
-        backgroundColor: WidgetStatePropertyAll(primary),
-        foregroundColor: WidgetStatePropertyAll(scheme.onPrimary),
-        shadowColor: WidgetStatePropertyAll(primary.withValues(alpha: 0.6)),
-        elevation: const WidgetStatePropertyAll(6),
-        shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        ),
-      );
+    backgroundColor: WidgetStatePropertyAll(primary),
+    foregroundColor: WidgetStatePropertyAll(scheme.onPrimary),
+    shadowColor: WidgetStatePropertyAll(primary.withValues(alpha: 0.6)),
+    elevation: const WidgetStatePropertyAll(6),
+    shape: WidgetStatePropertyAll(
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    ),
+  );
 
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
+    extensions: [brandColors],
     scaffoldBackgroundColor: scheme.surface,
     // Left-aligned titles app-wide; flat surface app bar (no grey elevation).
     appBarTheme: AppBarTheme(
@@ -53,13 +65,16 @@ ThemeData buildAppTheme({
       // and went invisible on the light surface in light themes.
       systemOverlayStyle: SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        statusBarIconBrightness:
-            brightness == Brightness.dark ? Brightness.light : Brightness.dark,
-        statusBarBrightness:
-            brightness == Brightness.dark ? Brightness.dark : Brightness.light,
+        statusBarIconBrightness: brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+        statusBarBrightness: brightness == Brightness.dark
+            ? Brightness.dark
+            : Brightness.light,
         systemNavigationBarColor: scheme.surface,
-        systemNavigationBarIconBrightness:
-            brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+        systemNavigationBarIconBrightness: brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
         systemNavigationBarDividerColor: Colors.transparent,
       ),
     ),
@@ -91,8 +106,10 @@ ThemeData buildAppTheme({
       indicatorColor: primary.withValues(alpha: 0.22),
       selectedIconTheme: IconThemeData(color: primary),
       unselectedIconTheme: IconThemeData(color: scheme.onSurfaceVariant),
-      selectedLabelTextStyle:
-          TextStyle(color: primary, fontWeight: FontWeight.w600),
+      selectedLabelTextStyle: TextStyle(
+        color: primary,
+        fontWeight: FontWeight.w600,
+      ),
       unselectedLabelTextStyle: TextStyle(color: scheme.onSurfaceVariant),
     ),
     // Accent the leading icons of list rows (More/Settings etc.).
@@ -110,12 +127,31 @@ ThemeData buildAppTheme({
       ),
     ),
     dividerTheme: DividerThemeData(color: outline, thickness: 1, space: 1),
-    chipTheme: ChipThemeData(
-      backgroundColor: primary.withValues(alpha: 0.12),
-      side: BorderSide(color: primary.withValues(alpha: 0.40)),
-      labelStyle: TextStyle(color: scheme.onSurface),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
-    ),
+    chipTheme: tokens?.accentBg != null
+        // Light: unselected chips are outlined, selected ones take the accent tint.
+        ? ChipThemeData(
+            backgroundColor: Colors.transparent,
+            selectedColor: tokens!.accentBg,
+            side: WidgetStateBorderSide.resolveWith(
+              (s) => BorderSide(
+                color: s.contains(WidgetState.selected)
+                    ? scheme.primary
+                    : scheme.outlineVariant,
+              ),
+            ),
+            labelStyle: TextStyle(color: scheme.onSurface),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(11),
+            ),
+          )
+        : ChipThemeData(
+            backgroundColor: primary.withValues(alpha: 0.12),
+            side: BorderSide(color: primary.withValues(alpha: 0.40)),
+            labelStyle: TextStyle(color: scheme.onSurface),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(11),
+            ),
+          ),
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith(
         (s) => s.contains(WidgetState.selected) ? primary : scheme.outline,
@@ -153,8 +189,9 @@ ThemeData buildAppTheme({
       ),
     ),
     textButtonTheme: TextButtonThemeData(
-      style:
-          ButtonStyle(foregroundColor: WidgetStatePropertyAll(brightPrimary)),
+      style: ButtonStyle(
+        foregroundColor: WidgetStatePropertyAll(brightPrimary),
+      ),
     ),
   );
 }
